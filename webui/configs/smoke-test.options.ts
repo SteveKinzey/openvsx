@@ -40,7 +40,7 @@ export interface SmokeTestOptions {
  */
 export const test = base.extend<SmokeTestOptions>({
   minNumberOfExtensions: [16, { option: true }],
-  searchTerms: [['DotJoshJohnson', 'python', 'java'], { option: true }],
+  searchTerms: [['python', 'java'], { option: true }],
   extensionToOpen: [
     {
       searchTerm: 'DotJoshJohnson',

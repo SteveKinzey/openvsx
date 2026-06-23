@@ -92,7 +92,7 @@ test.describe('OpenVSX', () => {
 });
 
 async function getResultCount(page: Page): Promise<number> {
-  const resultsText = await page.getByText('Results').innerText();
+  const resultsText = await page.getByText(/^\d+ Results?$/).innerText();
   return Number.parseInt(resultsText.split(' ')[0]);
 }
 
