@@ -1,0 +1,196 @@
+/******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation.
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
+
+import { describe, expect, it } from 'vitest';
+import { screen } from '@testing-library/react';
+import { AdminDashboard } from '../../../../src/pages/admin-dashboard/admin-dashboard';
+import { AdminPage } from '../../../../src/pages/admin-dashboard/nav-types';
+import { MainContext } from '../../../../src/context';
+import { PageSettings } from '../../../../src/page-settings';
+import { UserData } from '../../../../src/extension-registry-types';
+import { renderWithProviders } from '../../support/test-providers';
+
+const admin = { loginName: 'root', role: 'admin' } as UserData;
+const extensionManager = { loginName: 'sam', permissions: ['manage_extensions'] } as UserData;
+const noPermissions = { loginName: 'jo' } as UserData;
+
+const agentsPage: AdminPage = {
+    path: 'analytics/agents',
+    name: 'Agents',
+    icon: <span />,
+    description: 'Link customers to analytics user agents',
+    element: <div>contributed page body</div>
+};
+
+/**
+ * `AdminDashboard` owns a nested `Routes`, and in the app it is mounted under
+ * `/admin-dashboard/*` so those paths resolve relative to that match. Rendering it
+ * directly means the same route table resolves from the root instead, so a route here
+ * is the contributed `path` without the dashboard prefix.
+ */
+function renderDashboard(adminPages: AdminPage[] | undefined, route = '/', user: UserData = admin) {
+    const pageSettings = { elements: { adminPages } } as PageSettings;
+    const mainContext: Partial<MainContext> = { user, pageSettings };
+    return renderWithProviders(<AdminDashboard userLoading={false} />, { route, mainContext });
+}
+
+describe('AdminDashboard contributed pages', () => {
+    it('shows a contributed page as an overview card with its description', () => {
+        renderDashboard([agentsPage]);
+
+        expect(screen.getByText('Link customers to analytics user agents')).toBeInTheDocument();
+        // Once in the side panel, once as the overview card.
+        expect(screen.getAllByText('Agents')).toHaveLength(2);
+    });
+
+    it('renders a contributed page at its own route', () => {
+        renderDashboard([agentsPage], '/analytics/agents');
+
+        expect(screen.getByText('contributed page body')).toBeInTheDocument();
+        // The overview fallback must not also match.
+        expect(screen.queryByText('Welcome to the Admin Dashboard')).not.toBeInTheDocument();
+    });
+
+    it('merges a category into the built-in group of the same name instead of adding a second one', () => {
+        const { unmount } = renderDashboard(undefined);
+        const withoutContribution = screen.getAllByText('Analytics').length;
+        unmount();
+
+        renderDashboard([{ ...agentsPage, category: { name: 'Analytics', icon: <span /> } }]);
+
+        expect(screen.getAllByText('Analytics')).toHaveLength(withoutContribution);
+        expect(screen.getByText('Link customers to analytics user agents')).toBeInTheDocument();
+    });
+
+    it('ignores a contributed page that would shadow a built-in one', () => {
+        renderDashboard([{ ...agentsPage, path: 'logs', name: 'Not Logs' }]);
+
+        expect(screen.queryByText('Not Logs')).not.toBeInTheDocument();
+        expect(screen.queryByText('Link customers to analytics user agents')).not.toBeInTheDocument();
+        // The built-in entry is untouched.
+        expect(screen.getAllByText('Logs').length).toBeGreaterThan(0);
+    });
+
+    it('groups the built-in pages into logical sections instead of leaving them ungrouped', () => {
+        renderDashboard(undefined);
+
+        // Each group label appears twice: once in the side panel, once as an overview section heading.
+        for (const group of ['Content', 'Search', 'Maintenance', 'Administration', 'Analytics']) {
+            expect(screen.getAllByText(group).length).toBeGreaterThan(0);
+        }
+    });
+
+    it('expands the first side panel group by default', () => {
+        renderDashboard(undefined);
+
+        // The side panel's group Collapse unmounts its children unless expanded, so a
+        // child of the first group ("Content") rendering twice - side panel + overview -
+        // proves it starts expanded instead of collapsed like the other groups.
+        expect(screen.getAllByText('Namespaces')).toHaveLength(2);
+        // "Statistics" belongs to the later "Analytics" group, which stays collapsed.
+        expect(screen.getAllByText('Statistics')).toHaveLength(1);
+    });
+
+    // adminPages is consumer-provided, and a leading slash used to leave the shadowing check looking
+    // at an empty first segment, so this slipped past it and sat in the nav beside the built-in page.
+    it('ignores a shadowing page however its path is written', () => {
+        renderDashboard([{ ...agentsPage, path: '/logs/', name: 'Not Logs' }]);
+
+        expect(screen.queryByText('Not Logs')).not.toBeInTheDocument();
+        expect(screen.getAllByText('Logs').length).toBeGreaterThan(0);
+    });
+
+    it('ignores a contributed page with an empty path', () => {
+        renderDashboard([{ ...agentsPage, path: '/', name: 'Rootless' }]);
+
+        expect(screen.queryByText('Rootless')).not.toBeInTheDocument();
+    });
+});
+
+describe('AdminDashboard permission gating', () => {
+    it('shows the dashboard shell for a non-admin user with at least one granted permission', () => {
+        renderDashboard(undefined, '/', extensionManager);
+
+        // The previous behavior would have shown "not authorized" instead - this confirms the
+        // shell rendered without needing role === 'admin'. "Extensions" matches twice: the sidebar
+        // entry plus its group's expanded overview card.
+        expect(screen.getAllByText('Extensions').length).toBeGreaterThan(0);
+    });
+
+    it('still shows "not authorized" for a user with no role and no granted permissions', () => {
+        renderDashboard(undefined, '/', noPermissions);
+
+        expect(screen.getByText('You are not authorized as administrator.')).toBeInTheDocument();
+    });
+
+    it('hides a page from the sidebar and overview the user has no permission for', () => {
+        renderDashboard(undefined, '/', extensionManager);
+
+        expect(screen.queryByText('Namespaces')).not.toBeInTheDocument();
+    });
+
+    it('hides a nav group entirely once none of its pages are visible to the user', () => {
+        renderDashboard(undefined, '/', extensionManager);
+
+        // Analytics holds only view_reports pages - extensionManager has none of them.
+        expect(screen.queryByText('Analytics')).not.toBeInTheDocument();
+    });
+
+    // Contributed pages were admin-only by implication for as long as the whole dashboard was.
+    // Opening the dashboard to permission holders must not hand them a consumer's page as well.
+    it('keeps a contributed page that declares no permission admin-only', () => {
+        renderDashboard([agentsPage], '/', extensionManager);
+
+        expect(screen.queryByText('Agents')).not.toBeInTheDocument();
+    });
+
+    it('blocks the route of a contributed page that declares no permission', () => {
+        renderDashboard([agentsPage], '/analytics/agents', extensionManager);
+
+        expect(screen.getByText('You are not authorized for this page.')).toBeInTheDocument();
+        expect(screen.queryByText('contributed page body')).not.toBeInTheDocument();
+    });
+
+    it('shows a contributed page to a holder of the permission it declares', () => {
+        renderDashboard([{ ...agentsPage, permission: 'manage_extensions' }], '/analytics/agents', extensionManager);
+
+        expect(screen.getByText('contributed page body')).toBeInTheDocument();
+    });
+
+    it('still shows a contributed page to a full admin', () => {
+        renderDashboard([agentsPage], '/', admin);
+
+        expect(screen.getAllByText('Agents').length).toBeGreaterThan(0);
+    });
+
+    it('still shows every page to a full admin', () => {
+        renderDashboard(undefined, '/', admin);
+
+        expect(screen.getAllByText('Namespaces').length).toBeGreaterThan(0);
+        expect(screen.getAllByText('Access Control').length).toBeGreaterThan(0);
+    });
+
+    // The route renders regardless of permission - only Guard, inside it, decides what shows - so
+    // this proves the missing permission is what's blocking access, not the route failing to match.
+    it('blocks a page the user lacks the permission for, without rendering it', () => {
+        renderDashboard(undefined, '/settings', extensionManager);
+
+        expect(screen.getByText('You are not authorized for this page.')).toBeInTheDocument();
+    });
+
+    it("does not block a page covered by the user's granted permission", () => {
+        renderDashboard(undefined, '/extensions', extensionManager);
+
+        expect(screen.queryByText('You are not authorized for this page.')).not.toBeInTheDocument();
+    });
+});

@@ -1,17 +1,20 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Precies. Software OU and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.mail;
 
+import java.util.Map;
+
 import jakarta.annotation.PostConstruct;
-import org.eclipse.openvsx.entities.PersonalAccessToken;
-import org.eclipse.openvsx.entities.UserData;
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,8 +24,8 @@ import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
-import java.util.Map;
-
+import org.eclipse.openvsx.entities.PersonalAccessToken;
+import org.eclipse.openvsx.entities.UserData;
 
 @Component
 public class MailService {
@@ -86,7 +89,9 @@ public class MailService {
         var email = user.getEmail();
 
         if (email == null) {
-            logger.warn("Could not send mail to user '{}' due to expiring access token notification: email not known", user.getLoginName());
+            logger.warn(
+                    "Could not send mail to user '{}' due to expiring access token notification: email not known",
+                    user.getLoginName());
             return;
         }
 
@@ -96,17 +101,18 @@ public class MailService {
         var tokenName = token.getDescription() != null ? token.getDescription() : "";
 
         var variables = Map.<String, Object>of(
-                "name", name,
-                "tokenName", tokenName,
-                "expiryDate", token.getExpiresTimestamp()
-        );
+                "name",
+                name,
+                "tokenName",
+                tokenName,
+                "expiryDate",
+                token.getExpiresTimestamp());
         var jobRequest = new SendMailJobRequest(
                 from,
                 email,
                 accessTokenExpirySubject,
                 accessTokenExpiryTemplate,
-                variables
-        );
+                variables);
 
         scheduler.enqueue(jobRequest);
         logger.debug("Scheduled notification email for expiring token {} to {}", tokenName, email);
@@ -121,7 +127,9 @@ public class MailService {
         var email = user.getEmail();
 
         if (email == null) {
-            logger.warn("Could not send mail to user '{}' due to expired access token: email not known", user.getLoginName());
+            logger.warn(
+                    "Could not send mail to user '{}' due to expired access token: email not known",
+                    user.getLoginName());
             return;
         }
 
@@ -131,17 +139,18 @@ public class MailService {
         var tokenName = token.getDescription() != null ? token.getDescription() : "";
 
         var variables = Map.<String, Object>of(
-                "name", name,
-                "tokenName", tokenName,
-                "expiryDate", token.getExpiresTimestamp()
-        );
+                "name",
+                name,
+                "tokenName",
+                tokenName,
+                "expiryDate",
+                token.getExpiresTimestamp());
         var jobRequest = new SendMailJobRequest(
                 from,
                 email,
                 accessTokenExpiredSubject,
                 accessTokenExpiredTemplate,
-                variables
-        );
+                variables);
 
         scheduler.enqueue(jobRequest);
         logger.debug("Scheduled notification email for expired token {} to {}", tokenName, email);
@@ -153,7 +162,9 @@ public class MailService {
         }
 
         if (user.getEmail() == null) {
-            logger.warn("Could not send mail to user '{}' due to revoked access token: email not known", user.getLoginName());
+            logger.warn(
+                    "Could not send mail to user '{}' due to revoked access token: email not known",
+                    user.getLoginName());
             return;
         }
 
@@ -165,8 +176,7 @@ public class MailService {
                 user.getEmail(),
                 revokedAccessTokensSubject,
                 revokedAccessTokensTemplate,
-                variables
-        );
+                variables);
 
         scheduler.enqueue(jobRequest);
     }

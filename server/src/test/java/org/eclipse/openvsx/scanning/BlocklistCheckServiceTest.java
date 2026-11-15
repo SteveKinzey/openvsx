@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,23 +6,11 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import org.apache.commons.codec.digest.DigestUtils;
-import org.eclipse.openvsx.entities.ExtensionScan;
-import org.eclipse.openvsx.entities.FileDecision;
-import org.eclipse.openvsx.entities.UserData;
-import org.eclipse.openvsx.repositories.FileDecisionRepository;
-import org.eclipse.openvsx.util.TempFile;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
-import org.springframework.core.task.AsyncTaskExecutor;
-import org.springframework.core.task.SimpleAsyncTaskExecutor;
 
 import java.io.FileOutputStream;
 import java.lang.reflect.Field;
@@ -33,6 +21,19 @@ import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
+
+import org.apache.commons.codec.digest.DigestUtils;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.core.task.SimpleAsyncTaskExecutor;
+
+import org.eclipse.openvsx.entities.ExtensionScan;
+import org.eclipse.openvsx.entities.FileDecision;
+import org.eclipse.openvsx.entities.UserData;
+import org.eclipse.openvsx.repositories.FileDecisionRepository;
+import org.eclipse.openvsx.util.TempFile;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.anySet;
@@ -59,12 +60,12 @@ class BlocklistCheckServiceTest {
 
         ExtensionScanConfig scanConfig = new ExtensionScanConfig();
         setField(scanConfig, "enabled", true);
-        setField(scanConfig, "maxArchiveSizeBytes", 100 * 1024 * 1024L);  // 100MB
-        setField(scanConfig, "maxSingleFileBytes", 10 * 1024 * 1024L);    // 10MB
+        setField(scanConfig, "maxArchiveSizeBytes", 100 * 1024 * 1024L); // 100MB
+        setField(scanConfig, "maxSingleFileBytes", 10 * 1024 * 1024L); // 10MB
         setField(scanConfig, "maxEntryCount", 10000);
 
         fileDecisionRepository = mock(FileDecisionRepository.class);
-        
+
         // Use SimpleAsyncTaskExecutor for test execution
         AsyncTaskExecutor taskExecutor = new SimpleAsyncTaskExecutor();
         service = new BlocklistCheckService(config, scanConfig, fileDecisionRepository, taskExecutor);
@@ -146,9 +147,8 @@ class BlocklistCheckServiceTest {
         String hash1 = DigestUtils.sha256Hex(content1.getBytes(StandardCharsets.UTF_8));
         String hash2 = DigestUtils.sha256Hex(content2.getBytes(StandardCharsets.UTF_8));
         TempFile extensionFile = createTestZipMultipleFiles(
-                new String[]{"bad1.txt", "bad2.txt"},
-                new String[]{content1, content2}
-        );
+                new String[] { "bad1.txt", "bad2.txt" },
+                new String[] { content1, content2 });
 
         // Both files are blocked
         FileDecision decision1 = createBlockedDecision(hash1, "bad1.txt");
@@ -206,8 +206,7 @@ class BlocklistCheckServiceTest {
 
         assertTrue(result.passed());
         // Should have called repository with file hash only, not directory
-        verify(fileDecisionRepository).findBlockedByFileHashIn(argThat(set -> 
-            set.size() == 1  // Only the file, not the directory
+        verify(fileDecisionRepository).findBlockedByFileHashIn(argThat(set -> set.size() == 1 // Only the file, not the directory
         ));
     }
 
@@ -222,7 +221,8 @@ class BlocklistCheckServiceTest {
         when(fileDecisionRepository.findBlockedByFileHashIn(anySet()))
                 .thenAnswer(invocation -> {
                     Set<String> hashes = invocation.getArgument(0);
-                    assertTrue(hashes.contains(expectedHash), 
+                    assertTrue(
+                            hashes.contains(expectedHash),
                             "Expected hash " + expectedHash + " not found in " + hashes);
                     return List.of();
                 });
@@ -289,10 +289,10 @@ class BlocklistCheckServiceTest {
         scan.setNamespaceName("test-namespace");
         scan.setExtensionName("test-extension");
         scan.setExtensionVersion("1.0.0");
-        
+
         UserData user = new UserData();
         user.setLoginName("testuser");
-        
+
         return new PublishCheck.Context(scan, extensionFile, user);
     }
 
@@ -302,11 +302,11 @@ class BlocklistCheckServiceTest {
         decision.setFileName(fileName);
         decision.setDecision(FileDecision.BLOCKED);
         decision.setDecidedAt(LocalDateTime.now());
-        
+
         UserData admin = new UserData();
         admin.setLoginName("admin");
         decision.setDecidedBy(admin);
-        
+
         return decision;
     }
 

@@ -8,110 +8,163 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import { FunctionComponent, useState, useContext, useEffect, useRef, ReactNode } from 'react';
-import { Typography, Box } from '@mui/material';
-import { NamespaceDetail, NamespaceDetailConfigContext } from '../user/user-settings-namespace-detail';
+import { FunctionComponent, useState, useContext, useEffect, ReactNode } from 'react';
+import { Typography, Box, Button } from '@mui/material';
+import { useParams, useNavigate } from 'react-router';
+import { NamespaceDetailView } from '../../components/namespace/namespace-detail-view';
+import { NamespaceDetailConfigContext } from '../../components/namespace/namespace-detail-config';
 import { ButtonWithProgress } from '../../components/button-with-progress';
-import { Namespace, isError } from '../../extension-registry-types';
 import { MainContext } from '../../context';
+import { hasPermission } from '../../permissions';
+import { createRoute } from '../../utils';
+import { isNotFound } from '../../server-request';
+import { ExtensionDetailRoutes } from '../extension-detail/extension-detail-routes';
 import { StyledInput } from './namespace-input';
 import { SearchListContainer } from './search-list-container';
+import { AdminDashboardRoutes } from './admin-dashboard-routes';
+import { NamespaceChangeDialog } from './namespace-change-dialog';
+import { NamespaceDeleteDialog } from './namespace-delete-dialog';
+import { useAdminNamespace, useClearAdminNamespace, useCreateNamespace } from './use-namespace-admin';
 
-export const NamespaceAdmin: FunctionComponent = props => {
-    const { pageSettings, service, user, handleError } = useContext(MainContext);
+export const NamespaceAdmin: FunctionComponent = () => {
+    const { service, pageSettings, user } = useContext(MainContext);
+    const { namespace: nsParam } = useParams<{ namespace?: string }>();
+    const navigate = useNavigate();
 
-    const [loading, setLoading] = useState(false);
-    const [currentNamespace, setCurrentNamespace] = useState<Namespace | undefined>();
-    const [notFound, setNotFound] = useState('');
+    const [searchName, setSearchName] = useState(nsParam ?? '');
+    const [inputValue, setInputValue] = useState(nsParam ?? '');
+    // The namespace detail view can drive the loading indicator while it performs its own work.
+    const [detailLoading, setDetailLoading] = useState(false);
+    const [changeDialogIsOpen, setChangeDialogIsOpen] = useState(false);
+    const [deleteDialogIsOpen, setDeleteDialogIsOpen] = useState(false);
 
-    const abortController = useRef<AbortController>(new AbortController());
+    const { data: currentNamespace, isFetching, error, refetch } = useAdminNamespace(searchName);
+    const { mutate: createNamespace, isPending: isCreatingNamespace } = useCreateNamespace();
+    const clearNamespace = useClearAdminNamespace();
+
+    const notFound = isNotFound(error) ? searchName : '';
+
+    // Keep the URL in sync with the searched namespace so the view is deep-linkable.
     useEffect(() => {
-        return () => {
-            abortController.current.abort();
-        };
-    }, []);
+        const target = searchName
+            ? `${AdminDashboardRoutes.NAMESPACE_ADMIN}/${encodeURIComponent(searchName)}`
+            : AdminDashboardRoutes.NAMESPACE_ADMIN;
+        navigate(target, { replace: true });
+    }, [searchName, navigate]);
 
-    const handleDeleteNamespace = () => {
-        setCurrentNamespace(undefined);
-    };
-
-    const fetchNamespace = async (namespaceName: string) => {
-        if (!namespaceName) {
-            setCurrentNamespace(undefined);
-            setNotFound('');
-            return;
-        }
-        try {
-            setLoading(true);
-            const namespace = await service.admin.getNamespace(abortController.current, namespaceName);
-            if (isError(namespace)) {
-                throw namespace;
-            }
-            setCurrentNamespace(namespace);
-            setNotFound('');
-            setLoading(false);
-        } catch (err) {
-            if (err && err.status === 404) {
-                setNotFound(namespaceName);
-                setCurrentNamespace(undefined);
-            } else {
-                handleError(err);
-            }
-            setLoading(false);
+    const fetchNamespace = (namespaceName: string) => {
+        if (namespaceName && namespaceName === searchName) {
+            // Re-submitting the same name should force a fresh lookup.
+            refetch();
+        } else {
+            setSearchName(namespaceName);
         }
     };
 
-    const [inputValue, setInputValue] = useState('');
     const onChangeInput = (name: string) => {
         setInputValue(name);
     };
 
-    const [creating, setCreating] = useState(false);
-    const onCreate = async () => {
-        try {
-            setCreating(true);
-            await service.admin.createNamespace(abortController.current, {
-                name: inputValue
-            });
-            await fetchNamespace(inputValue);
-        } catch (err) {
-            handleError(err);
-        } finally {
-            setCreating(false);
-        }
+    const handleDeleteNamespace = () => {
+        clearNamespace(searchName);
+        setSearchName('');
     };
+
+    const onCreate = () => {
+        createNamespace(inputValue, { onSuccess: () => setSearchName(inputValue) });
+    };
+
+    const loading = isFetching || detailLoading;
+
+    // The extension admin page and the endpoint behind it need their own permission, so for a user
+    // who only manages namespaces these cards link to the public extension page, and load from the
+    // public API. Leaving the admin fetch in place would 403 once per extension and leave the
+    // namespace looking empty.
+    const canManageExtensions = hasPermission(user, 'manage_extensions');
+    const extensionRoutePrefix = canManageExtensions
+        ? AdminDashboardRoutes.EXTENSION_ADMIN
+        : createRoute([ExtensionDetailRoutes.ROOT]);
 
     let listContainer: ReactNode = '';
     if (currentNamespace && pageSettings && user) {
-        listContainer = <NamespaceDetailConfigContext.Provider value={{ defaultMemberRole: 'owner' }}>
-            <NamespaceDetail
-                setLoadingState={setLoading}
-                onDelete={handleDeleteNamespace}
-                namespace={currentNamespace}
-                filterUsers={() => true}
-                fixSelf={false}
-            />
-        </NamespaceDetailConfigContext.Provider>;
+        // The detail view lays the header out as a flex row, so these only need to be siblings.
+        const headerActions = (
+            <>
+                <Button variant='outlined' onClick={() => setChangeDialogIsOpen(true)}>
+                    Change Namespace
+                </Button>
+                {Object.keys(currentNamespace.extensions).length === 0 && (
+                    <Button variant='outlined' color='error' onClick={() => setDeleteDialogIsOpen(true)}>
+                        Delete
+                    </Button>
+                )}
+            </>
+        );
+        listContainer = (
+            <NamespaceDetailConfigContext.Provider value={{ defaultMemberRole: 'owner' }}>
+                <NamespaceDetailView
+                    setLoadingState={setDetailLoading}
+                    namespace={currentNamespace}
+                    headerActions={headerActions}
+                    extensionRoutePrefix={extensionRoutePrefix}
+                    extensionQuery={
+                        canManageExtensions
+                            ? extension => ({
+                                  queryKey: ['admin', 'extension', currentNamespace.name, extension.name],
+                                  queryFn: ({ signal }) =>
+                                      service.admin.getExtension(signal, currentNamespace.name, extension.name)
+                              })
+                            : undefined
+                    }
+                    // This namespace payload names every extension, inactive and soft-deleted ones
+                    // included; the public API used above has nothing to return for those, and an
+                    // extension this viewer cannot see is an absence rather than a failure.
+                    omitUnavailable={!canManageExtensions}
+                />
+                <NamespaceChangeDialog
+                    open={changeDialogIsOpen}
+                    onClose={() => setChangeDialogIsOpen(false)}
+                    namespace={currentNamespace}
+                    setLoadingState={setDetailLoading}
+                />
+                <NamespaceDeleteDialog
+                    open={deleteDialogIsOpen}
+                    onClose={() => setDeleteDialogIsOpen(false)}
+                    onDelete={() => {
+                        setDeleteDialogIsOpen(false);
+                        handleDeleteNamespace();
+                    }}
+                    namespace={currentNamespace}
+                    setLoadingState={setDetailLoading}
+                />
+            </NamespaceDetailConfigContext.Provider>
+        );
     } else if (notFound) {
-        listContainer = <Box display='flex' flexDirection='column' justifyContent='center' alignItems='center'>
-            <Typography variant='body1'>
-                Namespace {notFound} not found. Do you want to create it?
-            </Typography>
-            <Box mt={3}>
-                <ButtonWithProgress
-                    working={creating}
-                    onClick={onCreate}>
-                    Create Namespace {notFound}
-                </ButtonWithProgress>
+        listContainer = (
+            <Box display='flex' flexDirection='column' justifyContent='center' alignItems='center'>
+                <Typography variant='body1'>Namespace {notFound} not found. Do you want to create it?</Typography>
+                <Box mt={3}>
+                    <ButtonWithProgress working={isCreatingNamespace} onClick={onCreate}>
+                        Create Namespace {notFound}
+                    </ButtonWithProgress>
+                </Box>
             </Box>
-        </Box>;
+        );
     }
 
-    return <SearchListContainer
-        searchContainer={
-            [<StyledInput key='nsi' placeholder='Namespace' onSubmit={fetchNamespace} onChange={onChangeInput} />]
-        }
-        listContainer={listContainer}
-        loading={loading}
-    />;
+    return (
+        <SearchListContainer
+            searchContainer={[
+                <StyledInput
+                    key='nsi'
+                    placeholder='Namespace'
+                    value={inputValue}
+                    onSubmit={fetchNamespace}
+                    onChange={onChangeInput}
+                />
+            ]}
+            listContainer={listContainer}
+            loading={loading}
+        />
+    );
 };

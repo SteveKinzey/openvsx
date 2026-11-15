@@ -1,26 +1,16 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.storage;
-
-import com.google.cloud.storage.*;
-import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.cache.FilesCacheKeyGenerator;
-import org.eclipse.openvsx.entities.FileResource;
-import org.eclipse.openvsx.entities.Namespace;
-import org.eclipse.openvsx.util.FileUtil;
-import org.eclipse.openvsx.util.TempFile;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.data.util.Pair;
-import org.springframework.stereotype.Component;
-import org.springframework.web.server.ServerErrorException;
 
 import java.io.IOException;
 import java.net.URI;
@@ -28,6 +18,24 @@ import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+
+import com.google.cloud.storage.BlobId;
+import com.google.cloud.storage.BlobInfo;
+import com.google.cloud.storage.Storage;
+import com.google.cloud.storage.StorageOptions;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.util.Pair;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ServerErrorException;
+
+import org.eclipse.openvsx.cache.FilesCacheKeyGenerator;
+import org.eclipse.openvsx.entities.FileResource;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.util.FileUtil;
+import org.eclipse.openvsx.util.HttpHeadersUtil;
+import org.eclipse.openvsx.util.TempFile;
 
 import static org.eclipse.openvsx.cache.CacheService.CACHE_EXTENSION_FILES;
 import static org.eclipse.openvsx.cache.CacheService.GENERATOR_FILES;
@@ -94,14 +102,21 @@ public class GoogleCloudStorageService implements IStorageService {
     }
 
     protected void uploadFile(TempFile file, String fileName, String objectId) {
-        var blobInfoBuilder = BlobInfo.newBuilder(BlobId.of(bucketId, objectId))
-                .setContentType(StorageUtil.getFileType(fileName).toString());
-        if (fileName.endsWith(".vsix") || fileName.endsWith(".sigzip")) {
-            blobInfoBuilder.setContentDisposition("attachment; filename=\"" + fileName + "\"");
-        } else {
-            var cacheControl = StorageUtil.getCacheControl(fileName);
-            blobInfoBuilder.setCacheControl(cacheControl.getHeaderValue());
+        var headers = HttpHeadersUtil.createFileResponseHeaders(file.getPath(), fileName);
+        var blobInfoBuilder = BlobInfo.newBuilder(BlobId.of(bucketId, objectId));
+
+        if (headers.getContentType() != null) {
+            blobInfoBuilder.setContentType(headers.getContentType().toString());
         }
+
+        if (StringUtils.isNotBlank(headers.getContentDisposition().toString())) {
+            blobInfoBuilder.setContentDisposition(headers.getContentDisposition().toString());
+        }
+
+        if (headers.getCacheControl() != null) {
+            blobInfoBuilder.setCacheControl(headers.getCacheControl());
+        }
+
         try (
                 var in = Files.newByteChannel(file.getPath());
                 var out = getStorage().writer(blobInfoBuilder.build())
@@ -164,6 +179,21 @@ public class GoogleCloudStorageService implements IStorageService {
         return tempFile;
     }
 
+    @Override
+    public long getFileSize(FileResource resource) throws IOException {
+        if (StringUtils.isEmpty(bucketId)) {
+            throw new IllegalStateException(missingBucketIdMessage(resource.getName()));
+        }
+
+        // Storage.get is a metadata-only request; it doesn't transfer the blob's content.
+        var blob = getStorage().get(BlobId.of(bucketId, getObjectKey(resource)));
+        if (blob == null) {
+            throw new FileNotFoundInStorageException("Blob not found: " + getObjectKey(resource));
+        }
+
+        return blob.getSize();
+    }
+
     private String missingBucketIdMessage(String name) {
         return missingBucketIdMessage("Cannot determine location of file", name);
     }
@@ -173,7 +203,7 @@ public class GoogleCloudStorageService implements IStorageService {
     }
 
     @Override
-    public void copyFiles(List<Pair<FileResource,FileResource>> pairs) {
+    public void copyFiles(List<Pair<FileResource, FileResource>> pairs) {
         pairs.forEach(pair -> copy(getObjectKey(pair.getFirst()), getObjectKey(pair.getSecond())));
     }
 
@@ -192,7 +222,12 @@ public class GoogleCloudStorageService implements IStorageService {
     }
 
     @Override
-    @Cacheable(value = CACHE_EXTENSION_FILES, keyGenerator = GENERATOR_FILES, cacheManager = "fileCacheManager", sync = true)
+    @Cacheable(
+        value = CACHE_EXTENSION_FILES,
+        keyGenerator = GENERATOR_FILES,
+        cacheManager = "fileCacheManager",
+        sync = true
+    )
     public Path getCachedFile(FileResource resource) {
         if (StringUtils.isEmpty(bucketId)) {
             throw new IllegalStateException(missingBucketIdMessage(resource.getName()));

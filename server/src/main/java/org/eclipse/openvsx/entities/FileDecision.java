@@ -1,24 +1,25 @@
-/********************************************************************************
- * Copyright (c) 2026 Contributors to the Eclipse Foundation 
+/******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
- * See the NOTICE file(s) distributed with this work for additional 
+ * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
- * This program and the accompanying materials are made available under the 
+ * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
- * SPDX-License-Identifier: EPL-2.0 
- ********************************************************************************/
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
-
-import jakarta.persistence.*;
-import org.eclipse.openvsx.util.TimeUtil;
 
 import java.io.Serial;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.Objects;
+
+import jakarta.persistence.*;
+
+import org.eclipse.openvsx.util.TimeUtil;
 
 /**
  * Allow list / block list entry for individual files (by SHA256 hash).
@@ -34,7 +35,7 @@ public class FileDecision implements Serializable {
 
     /** Decision value: file is allowed */
     public static final String ALLOWED = "ALLOWED";
-    
+
     /** Decision value: file is blocked */
     public static final String BLOCKED = "BLOCKED";
 
@@ -233,8 +234,12 @@ public class FileDecision implements Serializable {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         FileDecision that = (FileDecision) o;
         return id == that.id
                 && Objects.equals(fileHash, that.fileHash)
@@ -246,4 +251,3 @@ public class FileDecision implements Serializable {
         return Objects.hash(id, fileHash, decision);
     }
 }
-

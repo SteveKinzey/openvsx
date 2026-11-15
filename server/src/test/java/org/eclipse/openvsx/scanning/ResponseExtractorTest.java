@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,17 +6,17 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.util.Map;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-
-import java.util.Map;
+import tools.jackson.databind.json.JsonMapper;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -29,7 +29,7 @@ class ResponseExtractorTest {
 
     @BeforeEach
     void setUp() {
-        extractor = new HttpResponseExtractor(new ObjectMapper());
+        extractor = new HttpResponseExtractor(new JsonMapper());
     }
 
     // === String extraction tests ===
@@ -37,8 +37,8 @@ class ResponseExtractorTest {
     @Test
     void extractString_simpleField() throws ScannerException {
         String json = """
-            {"status": "completed"}
-            """;
+                {"status": "completed"}
+                """;
 
         String result = extractor.extractString(json, "json", "$.status");
 
@@ -48,8 +48,8 @@ class ResponseExtractorTest {
     @Test
     void extractString_nestedField() throws ScannerException {
         String json = """
-            {"data": {"result": {"value": "found"}}}
-            """;
+                {"data": {"result": {"value": "found"}}}
+                """;
 
         String result = extractor.extractString(json, "json", "$.data.result.value");
 
@@ -59,8 +59,8 @@ class ResponseExtractorTest {
     @Test
     void extractString_returnsNullForMissingField() throws ScannerException {
         String json = """
-            {"status": "ok"}
-            """;
+                {"status": "ok"}
+                """;
 
         String result = extractor.extractString(json, "json", "$.missing");
 
@@ -73,10 +73,29 @@ class ResponseExtractorTest {
     }
 
     @Test
+    void extractBoolean_readsJsonBoolean() throws ScannerException {
+        String json = """
+                {"verdictData": {"isMalicious": true}}
+                """;
+
+        assertEquals(Boolean.TRUE, extractor.extractBoolean(json, "json", "$.verdictData.isMalicious"));
+    }
+
+    @Test
+    void extractBoolean_readsFalseAndMissing() throws ScannerException {
+        String json = """
+                {"verdictData": {"isMalicious": false}}
+                """;
+
+        assertEquals(Boolean.FALSE, extractor.extractBoolean(json, "json", "$.verdictData.isMalicious"));
+        assertNull(extractor.extractBoolean(json, "json", "$.verdictData.missing"));
+    }
+
+    @Test
     void extractString_handlesArrayIndex() throws ScannerException {
         String json = """
-            {"items": ["first", "second", "third"]}
-            """;
+                {"items": ["first", "second", "third"]}
+                """;
 
         String result = extractor.extractString(json, "json", "$.items[0]");
 
@@ -85,14 +104,12 @@ class ResponseExtractorTest {
 
     @Test
     void extractString_throwsForInvalidJson() {
-        assertThrows(ScannerException.class, () ->
-            extractor.extractString("not json", "json", "$.field"));
+        assertThrows(ScannerException.class, () -> extractor.extractString("not json", "json", "$.field"));
     }
 
     @Test
     void extractString_throwsForUnsupportedFormat() {
-        assertThrows(UnsupportedOperationException.class, () ->
-            extractor.extractString("<xml/>", "xml", "/root"));
+        assertThrows(IllegalArgumentException.class, () -> extractor.extractString("<xml/>", "xml", "/root"));
     }
 
     // === List extraction tests ===
@@ -100,8 +117,8 @@ class ResponseExtractorTest {
     @Test
     void extractList_returnsArrayItems() throws ScannerException {
         String json = """
-            {"threats": [{"name": "malware"}, {"name": "virus"}]}
-            """;
+                {"threats": [{"name": "malware"}, {"name": "virus"}]}
+                """;
 
         var result = extractor.extractList(json, "json", "$.threats[*]");
 
@@ -175,14 +192,12 @@ class ResponseExtractorTest {
 
     @Test
     void evaluateCondition_throwsForInvalidFormat() {
-        assertThrows(IllegalArgumentException.class, () ->
-            extractor.evaluateCondition(Map.of(), "invalid"));
+        assertThrows(IllegalArgumentException.class, () -> extractor.evaluateCondition(Map.of(), "invalid"));
     }
 
     @Test
     void evaluateCondition_throwsForUnsupportedOperator() {
-        assertThrows(IllegalArgumentException.class, () ->
-            extractor.evaluateCondition(Map.of("x", 1), "$.x ~= 1"));
+        assertThrows(IllegalArgumentException.class, () -> extractor.evaluateCondition(Map.of("x", 1), "$.x ~= 1"));
     }
 
     // === Expression evaluation tests ===

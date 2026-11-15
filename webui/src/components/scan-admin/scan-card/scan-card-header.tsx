@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import { FC, useState } from 'react';
+import { FC, useContext, useState } from 'react';
 import { Box, Typography, Chip, CircularProgress, Link } from '@mui/material';
 import {
     AdminPanelSettings as AdminPanelIcon,
@@ -19,21 +19,17 @@ import {
     GppMaybe as WarningIcon,
     Block as BlockIcon,
     Cancel as CancelIcon,
-    Info as InfoIcon,
+    Info as InfoIcon
 } from '@mui/icons-material';
 import { ScanResult } from '../../../context/scan-admin';
 import { ConditionalTooltip } from '../common';
 import { useTheme } from '@mui/material/styles';
-import {
-    ICON_SIZE,
-    isRunning,
-    shouldShowStriped,
-    getHypotheticalStatus,
-    getStatusColorSx,
-} from './utils';
+import { ICON_SIZE, isRunning, shouldShowStriped, getHypotheticalStatus, getStatusColorSx } from './utils';
 import { createRoute } from '../../../utils';
 import { AdminDashboardRoutes } from '../../../pages/admin-dashboard/admin-dashboard-routes';
 import { ExtensionDetailRoutes } from '../../../pages/extension-detail/extension-detail-routes';
+import { MainContext } from '../../../context';
+import { hasPermission } from '../../../permissions';
 
 interface ScanCardHeaderProps {
     scan: ScanResult;
@@ -62,15 +58,16 @@ const getStatusIcon = (status: ScanResult['status']) => {
  */
 export const ScanCardHeader: FC<ScanCardHeaderProps> = ({ scan }) => {
     const theme = useTheme();
+    const { user: currentUser } = useContext(MainContext);
     const [imageError, setImageError] = useState(false);
 
     const hasValidIcon = scan.extensionIcon && !imageError;
     const extensionRoute = createRoute([ExtensionDetailRoutes.ROOT, scan.namespace, scan.extensionName]);
-    const adminRoute = createRoute([AdminDashboardRoutes.ROOT, 'extensions'],
-        [
-            { key: "namespace", value: scan.namespace },
-            { key: "extension", value: scan.extensionName }
-        ]);
+    // Supplementary to the public link beside it, so it is simply left out for a user who cannot open
+    // the extension admin page - the extension itself stays reachable either way.
+    const adminRoute = hasPermission(currentUser, 'manage_extensions')
+        ? createRoute([AdminDashboardRoutes.ROOT, 'extensions', scan.namespace, scan.extensionName])
+        : undefined;
 
     return (
         <>
@@ -86,9 +83,8 @@ export const ScanCardHeader: FC<ScanCardHeaderProps> = ({ scan }) => {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    overflow: 'hidden',
-                }}
-            >
+                    overflow: 'hidden'
+                }}>
                 {hasValidIcon ? (
                     <img
                         src={scan.extensionIcon}
@@ -97,7 +93,7 @@ export const ScanCardHeader: FC<ScanCardHeaderProps> = ({ scan }) => {
                         style={{
                             width: '100%',
                             height: '100%',
-                            objectFit: 'contain',
+                            objectFit: 'contain'
                         }}
                     />
                 ) : (
@@ -116,9 +112,8 @@ export const ScanCardHeader: FC<ScanCardHeaderProps> = ({ scan }) => {
                             fontWeight: 600,
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                        }}
-                    >
+                            whiteSpace: 'nowrap'
+                        }}>
                         {scan.displayName}
                     </Typography>
                 </ConditionalTooltip>
@@ -129,44 +124,38 @@ export const ScanCardHeader: FC<ScanCardHeaderProps> = ({ scan }) => {
                         sx={{
                             overflow: 'hidden',
                             textOverflow: 'ellipsis',
-                            whiteSpace: 'nowrap',
-                        }}
-                    >
-                        <Link
-                            href={extensionRoute || undefined}
-                            rel='noopener noreferrer'
-                            variant='body2'
-                        >
+                            whiteSpace: 'nowrap'
+                        }}>
+                        <Link href={extensionRoute || undefined} rel='noopener noreferrer' variant='body2'>
                             {scan.namespace}.{scan.extensionName}
                         </Link>
 
-                        {adminRoute !== undefined &&
-                            <Link
-                                href={adminRoute}
-                                rel='noopener noreferrer'
-                                variant='body2'
-                            >
-                                <AdminPanelIcon sx={{
-                                    verticalAlign: 'bottom',
-                                    ml: '3px'
-                                }} />
+                        {adminRoute !== undefined && (
+                            <Link href={adminRoute} rel='noopener noreferrer' variant='body2'>
+                                <AdminPanelIcon
+                                    sx={{
+                                        verticalAlign: 'bottom',
+                                        ml: '3px'
+                                    }}
+                                />
                             </Link>
-                        }
+                        )}
                     </Typography>
                 </ConditionalTooltip>
             </Box>
 
             {/* Column 6: Status Badge */}
-            <Box sx={{
-                gridRow: '1',
-                gridColumn: '6',
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'flex-end',
-                justifyContent: 'flex-start',
-                minWidth: 0,
-                gap: 0.5,
-            }}>
+            <Box
+                sx={{
+                    gridRow: '1',
+                    gridColumn: '6',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    justifyContent: 'flex-start',
+                    minWidth: 0,
+                    gap: 0.5
+                }}>
                 {isRunning(scan.status) ? (
                     <CircularProgress size={32} color='secondary' />
                 ) : (
@@ -180,17 +169,18 @@ export const ScanCardHeader: FC<ScanCardHeaderProps> = ({ scan }) => {
                                 transform: 'scale(1.2)',
                                 transformOrigin: 'right top',
                                 ...(shouldShowStriped(scan) && {
-                                    background: `${theme.palette.unenforced.stripe}, ${getStatusColorSx(scan.status, theme).backgroundColor}`,
-                                }),
+                                    background: `${theme.palette.unenforced.stripe}, ${getStatusColorSx(scan.status, theme).backgroundColor}`
+                                })
                             }}
                         />
                         {shouldShowStriped(scan) && getHypotheticalStatus(scan) && (
-                            <Box sx={{
-                                display: 'flex',
-                                alignItems: 'center',
-                                gap: 0.5,
-                                mt: 0.5,
-                            }}>
+                            <Box
+                                sx={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 0.5,
+                                    mt: 0.5
+                                }}>
                                 <InfoIcon sx={{ fontSize: 14, color: 'text.secondary' }} />
                                 <Typography variant='caption' sx={{ color: 'text.secondary', fontSize: '0.7rem' }}>
                                     Would be {getHypotheticalStatus(scan)}

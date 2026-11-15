@@ -1,13 +1,22 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.search;
+
+import java.time.ZoneId;
+import java.util.*;
+import java.util.concurrent.locks.ReadWriteLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.stream.Collectors;
 
 import co.elastic.clients.elasticsearch._types.SortOptions;
 import co.elastic.clients.elasticsearch._types.SortOrder;
@@ -15,17 +24,10 @@ import co.elastic.clients.elasticsearch._types.mapping.FieldType;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch._types.query_dsl.QueryBuilders;
 import co.elastic.clients.util.ObjectBuilder;
-import jakarta.annotation.Nullable;
 import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.entities.Extension;
-import org.eclipse.openvsx.migration.HandlerJobRequest;
-import org.eclipse.openvsx.repositories.RepositoryService;
-import org.eclipse.openvsx.search.RelevanceService.SearchStats;
-import org.eclipse.openvsx.util.ErrorResultException;
-import org.eclipse.openvsx.util.NamingUtil;
-import org.eclipse.openvsx.util.TargetPlatform;
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.jobrunr.scheduling.cron.Cron;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,16 +44,19 @@ import org.springframework.data.elasticsearch.core.SearchHits;
 import org.springframework.data.elasticsearch.core.query.DeleteQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQuery;
 import org.springframework.data.elasticsearch.core.query.IndexQueryBuilder;
-import org.springframework.retry.annotation.Retryable;
+import org.springframework.data.elasticsearch.core.query.Query;
+import org.springframework.resilience.annotation.Retryable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StopWatch;
 
-import java.time.ZoneId;
-import java.util.*;
-import java.util.concurrent.locks.ReadWriteLock;
-import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.stream.Collectors;
+import org.eclipse.openvsx.entities.Extension;
+import org.eclipse.openvsx.migration.HandlerJobRequest;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.search.RelevanceService.SearchStats;
+import org.eclipse.openvsx.util.ErrorResultException;
+import org.eclipse.openvsx.util.NamingUtil;
+import org.eclipse.openvsx.util.TargetPlatform;
 
 import static org.eclipse.openvsx.cache.CacheService.CACHE_AVERAGE_REVIEW_RATING;
 
@@ -72,6 +77,9 @@ public class ElasticSearchService implements ISearchService {
     boolean clearOnStart;
 
     private long maxResultWindow;
+
+    /** Elasticsearch's own default, and what {@link #initSearchIndex} falls back to when the index is silent. */
+    private static final long DEFAULT_MAX_RESULT_WINDOW = 10_000;
 
     public ElasticSearchService(
             RepositoryService repositories,
@@ -96,7 +104,7 @@ public class ElasticSearchService implements ISearchService {
      * not exist yet, it is created and initialized. Otherwise, nothing happens.
      */
     @EventListener
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     @CacheEvict(value = CACHE_AVERAGE_REVIEW_RATING, allEntries = true)
     public void initSearchIndex(ApplicationStartedEvent event) {
         if (!isEnabled()) {
@@ -109,8 +117,7 @@ public class ElasticSearchService implements ISearchService {
                 "ElasticSearchUpdateIndex",
                 Cron.daily(4),
                 ZoneId.of("UTC"),
-                new HandlerJobRequest<>(ElasticSearchUpdateIndexJobRequestHandler.class)
-        );
+                new HandlerJobRequest<>(ElasticSearchUpdateIndexJobRequestHandler.class));
 
         if (clearOnStart || !searchOperations.indexOps(ExtensionSearch.class).exists()) {
             var stopWatch = new StopWatch();
@@ -129,7 +136,7 @@ public class ElasticSearchService implements ISearchService {
      * consider the extension publishing timestamps in relation to the current
      * time or the extension rating.
      */
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     @CacheEvict(value = CACHE_AVERAGE_REVIEW_RATING, allEntries = true)
     public void updateSearchIndex() {
         if (!isEnabled()) {
@@ -151,7 +158,7 @@ public class ElasticSearchService implements ISearchService {
      * In any case, this method scans all extensions in the database and indexes their
      * relevant metadata.
      */
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     public void updateSearchIndex(boolean clear) {
         var locked = false;
         try {
@@ -170,7 +177,7 @@ public class ElasticSearchService implements ISearchService {
                 locked = true;
                 indexOps.create();
             }
-            
+
             // Scan all extensions and create index queries
             var allExtensions = repositories.findAllActiveExtensions();
             if (allExtensions.isEmpty()) {
@@ -195,13 +202,40 @@ public class ElasticSearchService implements ISearchService {
         }
     }
 
+    /**
+     * Reports on the index itself rather than on what a search returns. The document count next to the
+     * number of extensions the index is built from is the useful part: the two drifting apart is how a
+     * half-populated or partly purged index shows itself, which searching for something and not finding
+     * it does not distinguish from the extension simply not existing.
+     */
+    public SearchIndexStats getIndexStats() {
+        var activeExtensions = repositories.countActiveExtensions();
+        if (!isEnabled()) {
+            return new SearchIndexStats(false, SearchIndexStats.ELASTICSEARCH, false, null, activeExtensions, null);
+        }
+
+        var indexOps = searchOperations.indexOps(ExtensionSearch.class);
+        if (!indexOps.exists()) {
+            return new SearchIndexStats(true, SearchIndexStats.ELASTICSEARCH, false, null, activeExtensions, null);
+        }
+
+        var documents = searchOperations.count(Query.findAll(), ExtensionSearch.class);
+        return new SearchIndexStats(
+                true,
+                SearchIndexStats.ELASTICSEARCH,
+                true,
+                documents,
+                activeExtensions,
+                getMaxResultWindow());
+    }
+
     @Async
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     public void updateSearchEntriesAsync(List<Extension> extensions) {
         updateSearchEntries(extensions);
     }
 
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     public void updateSearchEntries(List<Extension> extensions) {
         if (!isEnabled() || extensions.isEmpty()) {
             return;
@@ -220,7 +254,7 @@ public class ElasticSearchService implements ISearchService {
         }
     }
 
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     public void updateSearchEntry(Extension extension) {
         if (!isEnabled()) {
             return;
@@ -246,24 +280,30 @@ public class ElasticSearchService implements ISearchService {
                     .withObject(searchEntry)
                     .build();
         } else {
-            logger.warn("Trying to update search entry for inactive extension '{}'",NamingUtil.toExtensionId(extension));
+            logger.warn(
+                    "Trying to update search entry for inactive extension '{}'",
+                    NamingUtil.toExtensionId(extension));
             return null;
         }
     }
 
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     public void removeSearchEntries(Collection<Long> ids) {
         if (!isEnabled()) {
             return;
         }
 
         var queryBuilder = new NativeQueryBuilder();
-        var query = queryBuilder.withQuery(builder -> builder.ids(idsBuilder -> idsBuilder.values(ids.stream().map(String::valueOf).collect(Collectors.toList())))).build();
+        var query = queryBuilder
+                .withQuery(
+                        builder -> builder.ids(
+                                idsBuilder -> idsBuilder
+                                        .values(ids.stream().map(String::valueOf).collect(Collectors.toList()))))
+                .build();
         searchOperations.delete(DeleteQuery.builder(query).build(), ExtensionSearch.class);
     }
 
-
-    @Retryable(retryFor = DataAccessResourceFailureException.class)
+    @Retryable(includes = DataAccessResourceFailureException.class)
     public void removeSearchEntry(Extension extension) {
         if (!isEnabled()) {
             return;
@@ -277,14 +317,72 @@ public class ElasticSearchService implements ISearchService {
         }
     }
 
+    /**
+     * The same search the registry answers, with the scores kept.
+     * <p>
+     * {@link #search} throws them away - a caller wanting results does not care - but they are the whole
+     * point when the question is why a result sits where it does. Built through the same
+     * {@code createQuery} and {@code sortResults} as the real search rather than a copy of them, because a
+     * debugging view assembled separately is a view of a query nobody runs, and the first thing it would
+     * hide is the two having drifted apart.
+     * <p>
+     * One page only: this answers an admin looking at a result list, not a client paging through one.
+     */
+    public SearchHits<ExtensionSearch> searchWithScores(Options options) {
+        // The same ceiling the real search enforces. Without it a deep enough offset reaches Elasticsearch
+        // and comes back as an engine error about the result window, which says nothing about what to do.
+        var resultWindow = options.requestedOffset() + options.requestedSize();
+        if (resultWindow > getMaxResultWindow()) {
+            throw new ErrorResultException(
+                    "Cannot look past result " + getMaxResultWindow() + "; the index will not serve a deeper window.");
+        }
+
+        var queryBuilder = new NativeQueryBuilder();
+        createQuery(queryBuilder, options);
+        sortResults(queryBuilder, options.sortOrder(), options.sortBy());
+        // Whole pages only, which is all the one caller asks for - a partial page would need the
+        // two-page dance search() does, for an offset nothing produces.
+        queryBuilder.withPageable(
+                PageRequest.of(options.requestedOffset() / options.requestedSize(), options.requestedSize()));
+        queryBuilder.withTrackTotalHits(true);
+        // Elasticsearch's own account of how it arrived at each score, which is the only way to see what
+        // the text half is made of - the clause that matched, and what it was worth. It makes the search
+        // materially more expensive, which is why only this caller asks for it.
+        queryBuilder.withExplain(true);
+
+        try {
+            rwLock.readLock().lock();
+            return searchOperations.search(
+                    queryBuilder.build(),
+                    ExtensionSearch.class,
+                    searchOperations.indexOps(ExtensionSearch.class).getIndexCoordinates());
+        } finally {
+            rwLock.readLock().unlock();
+        }
+    }
+
+    /**
+     * The deepest window the index will serve.
+     * <p>
+     * The field behind this is read from the index settings by {@link #initSearchIndex}, which runs on
+     * {@code ApplicationStartedEvent} - so until that has happened, or if it failed short of reading them,
+     * the field is zero. Taken literally that refuses every window there is, and since a refused window is
+     * an empty result rather than an error, an instance in that state answers every search with nothing
+     * and says nothing about why. Fall back to the engine's own default instead, which is what the index
+     * would almost certainly have said.
+     */
+    private long getMaxResultWindow() {
+        return maxResultWindow > 0 ? maxResultWindow : DEFAULT_MAX_RESULT_WINDOW;
+    }
+
     public SearchResult search(Options options) {
         var resultWindow = options.requestedOffset() + options.requestedSize();
-        if (resultWindow > maxResultWindow) {
+        if (resultWindow > getMaxResultWindow()) {
             return new SearchResult(0L, Collections.emptyList());
         }
 
         var queryBuilder = new NativeQueryBuilder();
-        queryBuilder.withQuery(builder -> builder.bool(boolQuery -> createSearchQuery(boolQuery, options)));
+        createQuery(queryBuilder, options);
 
         // Sort search results according to 'sortOrder' and 'sortBy' options
         sortResults(queryBuilder, options.sortOrder(), options.sortBy());
@@ -303,7 +401,10 @@ public class ElasticSearchService implements ISearchService {
             queryBuilder.withTrackTotalHits(true);
             try {
                 rwLock.readLock().lock();
-                var searchHits = searchOperations.search(queryBuilder.build(), ExtensionSearch.class, searchOperations.indexOps(ExtensionSearch.class).getIndexCoordinates());
+                var searchHits = searchOperations.search(
+                        queryBuilder.build(),
+                        ExtensionSearch.class,
+                        searchOperations.indexOps(ExtensionSearch.class).getIndexCoordinates());
                 searchHitsList.add(searchHits);
             } finally {
                 rwLock.readLock().unlock();
@@ -332,7 +433,10 @@ public class ElasticSearchService implements ISearchService {
 
         if (!StringUtils.isEmpty(options.namespace())) {
             // Filter by namespace
-            boolQuery.must(QueryBuilders.term(builder -> builder.field("namespace.keyword").value(options.namespace()).caseInsensitive(true)));
+            boolQuery.must(
+                    QueryBuilders.term(
+                            builder -> builder.field("namespace.keyword").value(options.namespace())
+                                    .caseInsensitive(true)));
         }
         if (!StringUtils.isEmpty(options.category())) {
             // Filter by selected category
@@ -340,60 +444,103 @@ public class ElasticSearchService implements ISearchService {
         }
         if (TargetPlatform.isValid(options.targetPlatform())) {
             // Filter by selected target platform
-            boolQuery.must(QueryBuilders.matchPhrase(builder -> builder.field("targetPlatforms").query(options.targetPlatform())));
+            boolQuery.must(
+                    QueryBuilders
+                            .matchPhrase(builder -> builder.field("targetPlatforms").query(options.targetPlatform())));
         }
         if (options.namespacesToExclude() != null) {
             // Exclude namespaces
-            for(var namespaceToExclude : options.namespacesToExclude()) {
-                boolQuery.mustNot(QueryBuilders.term(builder -> builder.field("namespace.keyword").value(namespaceToExclude)));
+            for (var namespaceToExclude : options.namespacesToExclude()) {
+                boolQuery.mustNot(
+                        QueryBuilders.term(builder -> builder.field("namespace.keyword").value(namespaceToExclude)));
             }
         }
 
         return boolQuery;
     }
 
+    /**
+     * Puts an exact {@code namespace.name} first, which is what someone who already knows precisely which
+     * extension they want types or pastes.
+     * <p>
+     * Matched on the two fields holding the parts rather than the {@code extensionId} the document also
+     * carries: that field is {@code @Field(index = false)}, so it reaches {@code _source} and no inverted
+     * index, and no term query against it can match.
+     * <p>
+     * Splitting on the dot is unambiguous - {@link org.eclipse.openvsx.ExtensionValidator} holds both a
+     * namespace and a name to {@code [\w\-\+\$~]+}, so a well-formed id has exactly one. Anything else
+     * adds no clause.
+     */
+    private void addExtensionIdQuery(BoolQuery.Builder boolQuery, String queryString) {
+        var parts = queryString.trim().split("\\.", -1);
+        if (parts.length != 2 || parts[0].isEmpty() || parts[1].isEmpty()) {
+            return;
+        }
+
+        boolQuery.should(
+                QueryBuilders.bool(
+                        extensionId -> extensionId
+                                .must(
+                                        QueryBuilders.term(
+                                                builder -> builder.field("namespace.keyword")
+                                                        .value(parts[0])
+                                                        .caseInsensitive(true)))
+                                .must(
+                                        QueryBuilders.term(
+                                                builder -> builder.field("name.keyword")
+                                                        .value(parts[1])
+                                                        .caseInsensitive(true)))
+                                .boost(10f)));
+    }
+
     private ObjectBuilder<BoolQuery> createTextSearchQuery(BoolQuery.Builder boolQuery, Options options) {
-        boolQuery.should(QueryBuilders.term(builder ->
-                builder.field("extensionId.keyword")
-                        .value(options.queryString())
-                        .caseInsensitive(true)
-                        .boost(10f)
-        ));
+        addExtensionIdQuery(boolQuery, options.queryString());
 
-        // matching of search query in multiple fields with boost
-        var multiMatchQuery = QueryBuilders.multiMatch(builder ->
-                builder.query(options.queryString())
-                        .fields("name").boost(5f)
-                        .fields("displayName").boost(5f)
-                        .fields("tags").boost(3f)
-                        .fields("namespace").boost(2f)
-                        .fields("description")
-        );
+        // Weighted so what an extension is called counts for more than what it says about itself. The
+        // weights belong in the field names: `boost` on a multi_match is the whole query's boost, not a
+        // per-field one, so `.fields(x).boost(n)` would weight nothing.
+        var multiMatchQuery = QueryBuilders.multiMatch(
+                builder -> builder.query(options.queryString())
+                        .fields("name^5", "displayName^5", "tags^3", "namespace^2", "description")
+                        .boost(5f));
 
-        boolQuery.should(multiMatchQuery).boost(5f);
+        boolQuery.should(multiMatchQuery);
 
         // Fuzzy matching of search query in multiple fields without boost
         // Same as above except does not fuzzy match tags
-        var fuzzyMultiMatchQuery = QueryBuilders.multiMatch(builder ->
-                builder.query(options.queryString())
-                        .fields("name")
-                        .fields("displayName")
-                        .fields("namespace")
-                        .fields("description")
+        var fuzzyMultiMatchQuery = QueryBuilders.multiMatch(
+                builder -> builder.query(options.queryString())
+                        .fields("name", "displayName", "namespace", "description")
                         .fuzziness("AUTO")
-                        .prefixLength(2)
-        );
+                        .prefixLength(2));
 
         boolQuery.should(fuzzyMultiMatchQuery);
 
-        // Prefix matching of search query in display name and namespace
+        // Prefix matching of search query in display name and namespace. The boost goes on the clause:
+        // `boolQuery.should(...)` returns the bool builder, so boosting after it would boost the bool.
         var prefixString = options.queryString().trim().toLowerCase();
-        var namePrefixQuery = QueryBuilders.prefix(builder -> builder.field("displayName").value(prefixString));
-        boolQuery.should(namePrefixQuery).boost(2f);
+        var namePrefixQuery = QueryBuilders
+                .prefix(builder -> builder.field("displayName").value(prefixString).boost(2f));
+        boolQuery.should(namePrefixQuery);
         var namespacePrefixQuery = QueryBuilders.prefix(builder -> builder.field("namespace").value(prefixString));
         boolQuery.should(namespacePrefixQuery);
 
         return boolQuery;
+    }
+
+    private void createQuery(NativeQueryBuilder queryBuilder, Options options) {
+        if (SortBy.RELEVANCE.equals(options.sortBy())) {
+            queryBuilder.withQuery(
+                    builder -> builder.functionScore(
+                            scoreQuery -> scoreQuery.query(
+                                    sortQueryBuilder -> sortQueryBuilder
+                                            .bool(boolQuery -> createSearchQuery(boolQuery, options)))
+                                    .functions(
+                                            functionBuilder -> functionBuilder.fieldValueFactor(
+                                                    factor -> factor.field("relevance").factor(1.0)))));
+        } else {
+            queryBuilder.withQuery(builder -> builder.bool(boolQuery -> createSearchQuery(boolQuery, options)));
+        }
     }
 
     private void sortResults(NativeQueryBuilder queryBuilder, String sortOrder, String sortBy) {
@@ -405,11 +552,14 @@ public class ElasticSearchService implements ISearchService {
         }
 
         var types = Map.of(
-                SortBy.RELEVANCE, FieldType.Float,
-                SortBy.RATING, FieldType.Float,
-                SortBy.TIMESTAMP, FieldType.Long,
-                SortBy.DOWNLOADS, FieldType.Integer
-        );
+                SortBy.RELEVANCE,
+                FieldType.Float,
+                SortBy.RATING,
+                FieldType.Float,
+                SortBy.TIMESTAMP,
+                FieldType.Long,
+                SortBy.DOWNLOADS,
+                FieldType.Integer);
 
         var type = types.get(sortBy);
         if (type == null) {
@@ -417,8 +567,9 @@ public class ElasticSearchService implements ISearchService {
         }
 
         var scoreSort = new SortOptions.Builder().score(builder -> builder.order(order)).build();
-        var fieldSort = new SortOptions.Builder().field(builder -> builder.field(sortBy).unmappedType(type).order(order)).build();
-        var sortOptions = sortBy.equals(SortBy.RELEVANCE) ? List.of(scoreSort, fieldSort) : List.of(fieldSort, scoreSort);
+        var fieldSort = new SortOptions.Builder()
+                .field(builder -> builder.field(sortBy).unmappedType(type).order(order)).build();
+        var sortOptions = sortBy.equals(SortBy.RELEVANCE) ? List.of(scoreSort) : List.of(fieldSort, scoreSort);
         queryBuilder.withSort(sortOptions);
     }
 }

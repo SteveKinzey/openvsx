@@ -1,25 +1,16 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx;
-
-import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.adapter.ExtensionQueryResult;
-import org.eclipse.openvsx.json.*;
-import org.eclipse.openvsx.util.UrlUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
 
 import java.net.URI;
 import java.net.URISyntaxException;
@@ -28,19 +19,35 @@ import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
+import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+import tools.jackson.databind.JsonNode;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+
+import org.eclipse.openvsx.adapter.ExtensionQueryResult;
+import org.eclipse.openvsx.json.*;
+import org.eclipse.openvsx.util.UrlUtil;
+
 @Component
-@ConditionalOnProperty(value="ovsx.upstream.proxy.enabled", havingValue = "true")
+@ConditionalOnProperty(value = "ovsx.upstream.proxy.enabled", havingValue = "true")
 public class UpstreamProxyService {
 
     protected final Logger logger = LoggerFactory.getLogger(UpstreamProxyService.class);
 
     public NamespaceJson rewriteUrls(NamespaceJson json) {
         rewriteUrlMap(json.getExtensions());
-        if(!StringUtils.isEmpty(json.getMembersUrl())) {
+        if (!StringUtils.isEmpty(json.getMembersUrl())) {
             json.setMembersUrl(rewriteUrl(json.getMembersUrl()));
         }
-        if(!StringUtils.isEmpty(json.getRoleUrl())) {
+        if (!StringUtils.isEmpty(json.getRoleUrl())) {
             json.setRoleUrl(rewriteUrl(json.getRoleUrl()));
+        }
+        if (!StringUtils.isEmpty(json.getTrustedPublishingUrl())) {
+            json.setTrustedPublishingUrl(rewriteUrl(json.getTrustedPublishingUrl()));
         }
 
         return json;
@@ -68,9 +75,13 @@ public class UpstreamProxyService {
     }
 
     public ExtensionQueryResult rewriteUrls(ExtensionQueryResult json) {
-        return new ExtensionQueryResult(json.results().stream()
-                .map(result -> new ExtensionQueryResult.ResultItem(rewriteExtensionUrls(result.extensions()), result.resultMetadata()))
-                .toList());
+        return new ExtensionQueryResult(
+                json.results().stream()
+                        .map(
+                                result -> new ExtensionQueryResult.ResultItem(
+                                        rewriteExtensionUrls(result.extensions()),
+                                        result.resultMetadata()))
+                        .toList());
     }
 
     public ExtensionQueryResult.Extension rewriteUrls(ExtensionQueryResult.Extension json) {
@@ -79,44 +90,46 @@ public class UpstreamProxyService {
 
     private List<ExtensionQueryResult.Extension> rewriteExtensionUrls(List<ExtensionQueryResult.Extension> extensions) {
         return extensions.stream()
-                .map(extension -> new ExtensionQueryResult.Extension(
-                        extension.extensionId(),
-                        extension.extensionName(),
-                        extension.displayName(),
-                        extension.shortDescription(),
-                        extension.publisher(),
-                        rewriteVersionUrls(extension.versions()),
-                        extension.statistics(),
-                        extension.tags(),
-                        extension.releaseDate(),
-                        extension.publishedDate(),
-                        extension.lastUpdated(),
-                        extension.categories(),
-                        extension.flags()
-                ))
+                .map(
+                        extension -> new ExtensionQueryResult.Extension(
+                                extension.extensionId(),
+                                extension.extensionName(),
+                                extension.displayName(),
+                                extension.shortDescription(),
+                                extension.publisher(),
+                                rewriteVersionUrls(extension.versions()),
+                                extension.statistics(),
+                                extension.tags(),
+                                extension.releaseDate(),
+                                extension.publishedDate(),
+                                extension.lastUpdated(),
+                                extension.categories(),
+                                extension.flags()))
                 .toList();
     }
 
-    private List<ExtensionQueryResult.ExtensionVersion> rewriteVersionUrls(List<ExtensionQueryResult.ExtensionVersion> versions) {
+    private List<ExtensionQueryResult.ExtensionVersion> rewriteVersionUrls(
+            List<ExtensionQueryResult.ExtensionVersion> versions
+    ) {
         return versions.stream()
-                .map(version -> new ExtensionQueryResult.ExtensionVersion(
-                        version.version(),
-                        version.lastUpdated(),
-                        rewriteUrl(version.assetUri()),
-                        rewriteUrl(version.fallbackAssetUri()),
-                        rewriteFileUrls(version.files()),
-                        version.properties(),
-                        version.targetPlatform()
-                ))
+                .map(
+                        version -> new ExtensionQueryResult.ExtensionVersion(
+                                version.version(),
+                                version.lastUpdated(),
+                                rewriteUrl(version.assetUri()),
+                                rewriteUrl(version.fallbackAssetUri()),
+                                rewriteFileUrls(version.files()),
+                                version.properties(),
+                                version.targetPlatform()))
                 .toList();
     }
 
     private List<ExtensionQueryResult.ExtensionFile> rewriteFileUrls(List<ExtensionQueryResult.ExtensionFile> files) {
         return files.stream()
-                .map(file -> new ExtensionQueryResult.ExtensionFile(
-                        file.assetType(),
-                        rewriteUrl(file.source())
-                ))
+                .map(
+                        file -> new ExtensionQueryResult.ExtensionFile(
+                                file.assetType(),
+                                rewriteUrl(file.source())))
                 .toList();
     }
 
@@ -131,10 +144,10 @@ public class UpstreamProxyService {
     }
 
     public JsonNode rewriteUrls(JsonNode json) {
-        if(json.isArray()) {
-            var list = new ObjectMapper().createArrayNode();
+        if (json.isArray()) {
+            var list = JsonMapper.shared().createArrayNode();
             var array = (ArrayNode) json;
-            array.forEach(url -> list.add(rewriteUrl(url.asText())));
+            array.forEach(url -> list.add(rewriteUrl(url.asString())));
             json = list;
         }
 
@@ -164,12 +177,12 @@ public class UpstreamProxyService {
         return json;
     }
 
-    private <T> List<T> rewriteUrlList(List<T> jsonList, Function<T,T> mapper) {
+    private <T> List<T> rewriteUrlList(List<T> jsonList, Function<T, T> mapper) {
         return jsonList != null ? jsonList.stream().map(mapper).collect(Collectors.toList()) : jsonList;
     }
 
     private void rewriteUrlMap(Map<String, String> map) {
-        if(map != null) {
+        if (map != null) {
             map.replaceAll((k, v) -> rewriteUrl(v));
         }
     }

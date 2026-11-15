@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,15 +6,15 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
 
-import org.junit.jupiter.api.Test;
-
 import java.util.Map;
+
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -39,10 +39,12 @@ class HttpTemplateEngineTest {
     void process_substitutesMultiplePlaceholders() {
         String template = "{protocol}://{host}/api/{version}";
         var placeholders = Map.of(
-            "protocol", "https",
-            "host", "api.example.com",
-            "version", "v2"
-        );
+                "protocol",
+                "https",
+                "host",
+                "api.example.com",
+                "version",
+                "v2");
 
         String result = engine.process(template, placeholders);
 
@@ -71,8 +73,7 @@ class HttpTemplateEngineTest {
         String template = "value is {missing}";
         var placeholders = Map.of("other", "value");
 
-        assertThrows(IllegalArgumentException.class, () ->
-            engine.process(template, placeholders));
+        assertThrows(IllegalArgumentException.class, () -> engine.process(template, placeholders));
     }
 
     @Test
@@ -94,9 +95,10 @@ class HttpTemplateEngineTest {
     @Test
     void processMap_substitutesAllValues() {
         var map = Map.of(
-            "Authorization", "Bearer {token}",
-            "X-Job-Id", "{jobId}"
-        );
+                "Authorization",
+                "Bearer {token}",
+                "X-Job-Id",
+                "{jobId}");
         var placeholders = Map.of("token", "abc123", "jobId", "999");
 
         var result = engine.processMap(map, placeholders);

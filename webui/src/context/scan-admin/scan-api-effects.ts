@@ -11,10 +11,95 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import type { Dispatch, MutableRefObject } from "react";
+import type { Dispatch } from 'react';
 import { useEffect } from 'react';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useReportedQuery } from '../../hooks/use-reported-query';
 import { ScanState, ScanAction, ScanResult } from './scan-types';
 import { getDateRangeParams, getFileDateRange } from './scan-helpers';
+
+// These views show live moderation data and rely on an explicit refresh trigger,
+// so every query is keyed on `state.refreshTrigger` and kept fresh (`staleTime: 0`).
+// `keepPreviousData` preserves the current rows during background refreshes and
+// tab/filter changes, and the query's `isLoading` flag is dispatched so loading
+// shows only while there is no data.
+
+/**
+ * Converts a raw /scans API response into the ScanResult[] shape used by the reducer.
+ */
+const convertScans = (response: any): { scans: ScanResult[]; totalScans: number } => {
+    const scans: ScanResult[] = response.scans.map((scan: any) => ({
+        id: scan.id,
+        displayName: scan.displayName || scan.extensionName,
+        namespace: scan.namespace,
+        extensionName: scan.extensionName,
+        publisher: scan.publisher || '',
+        publisherUrl: scan.publisherUrl || null,
+        version: scan.version,
+        targetPlatform: scan.targetPlatform || 'universal',
+        universalTargetPlatform: scan.universalTargetPlatform ?? true,
+        status: scan.status as any,
+        dateScanStarted: scan.dateScanStarted,
+        dateScanEnded: scan.dateScanEnded || null,
+        dateQuarantined: scan.dateQuarantined || null,
+        dateRejected: scan.dateRejected || null,
+        adminDecision: scan.adminDecision
+            ? {
+                  decision: scan.adminDecision.decision,
+                  decidedBy: scan.adminDecision.decidedBy,
+                  dateDecided: scan.adminDecision.dateDecided
+              }
+            : null,
+        threats: (scan.threats || []).map((threat: any) => ({
+            id: threat.id,
+            fileName: threat.fileName,
+            fileHash: threat.fileHash,
+            fileExtension: threat.fileExtension,
+            type: threat.type,
+            ruleName: threat.ruleName,
+            severity: threat.severity,
+            enforcedFlag: threat.enforcedFlag ?? true,
+            reason: threat.reason,
+            dateDetected: threat.dateDetected
+        })),
+        validationFailures: (scan.validationFailures || []).map((failure: any) => ({
+            id: failure.id,
+            type: failure.type,
+            ruleName: failure.ruleName,
+            reason: failure.reason,
+            dateDetected: failure.dateDetected,
+            enforcedFlag: failure.enforcedFlag ?? true
+        })),
+        checkResults: (scan.checkResults || []).map((result: any) => ({
+            checkType: result.checkType,
+            category: result.category,
+            result: result.result,
+            startedAt: result.startedAt,
+            completedAt: result.completedAt || null,
+            durationMs: result.durationMs ?? null,
+            filesScanned: result.filesScanned || null,
+            findingsCount: result.findingsCount || null,
+            summary: result.summary || null,
+            errorMessage: result.errorMessage || null,
+            required: result.required ?? null,
+            externalUrl: result.externalUrl || null
+        })),
+        scannerJobs: (scan.scannerJobs || []).map((job: any) => ({
+            id: job.id,
+            scannerType: job.scannerType,
+            status: job.status,
+            createdAt: job.createdAt,
+            updatedAt: job.updatedAt,
+            errorMessage: job.errorMessage || null,
+            externalUrl: job.externalUrl || null
+        })),
+        extensionIcon: scan.extensionIcon,
+        downloadUrl: scan.downloadUrl || null,
+        errorMessage: scan.errorMessage || null
+    }));
+
+    return { scans, totalScans: response.totalSize };
+};
 
 // ============================================================================
 // Filter Options Effect
@@ -23,35 +108,30 @@ import { getDateRangeParams, getFileDateRange } from './scan-helpers';
 /**
  * Hook to fetch filter options (validation types, threat scanners) on mount and refresh
  */
-export const useFilterOptionsEffect = (
-    service: any,
-    state: ScanState,
-    dispatch: Dispatch<ScanAction>,
-    handleErrorRef: MutableRefObject<(error: any) => void>
-) => {
+export const useFilterOptionsEffect = (service: any, state: ScanState, dispatch: Dispatch<ScanAction>) => {
+    const { data, error } = useReportedQuery(
+        useQuery({
+            queryKey: ['admin', 'scan', 'filter-options', state.refreshTrigger],
+            queryFn: ({ signal }) => service.admin.getScanFilterOptions(signal),
+            staleTime: 0
+        }),
+        { action: 'load the scan filters' }
+    );
+
     useEffect(() => {
-        const abortController = new AbortController();
+        if (data) {
+            dispatch({ type: 'SET_AVAILABLE_VALIDATION_TYPES', payload: data.validationTypes || [] });
+            dispatch({ type: 'SET_AVAILABLE_THREAT_SCANNERS', payload: data.threatScannerNames || [] });
+            dispatch({ type: 'SET_FILTER_OPTIONS_LOADED', payload: true });
+        }
+    }, [data, dispatch]);
 
-        const fetchFilterOptions = async () => {
-            try {
-                const options = await service.admin.getScanFilterOptions(abortController);
-                if (!abortController.signal.aborted) {
-                    dispatch({ type: 'SET_AVAILABLE_VALIDATION_TYPES', payload: options.validationTypes || [] });
-                    dispatch({ type: 'SET_AVAILABLE_THREAT_SCANNERS', payload: options.threatScannerNames || [] });
-                    dispatch({ type: 'SET_FILTER_OPTIONS_LOADED', payload: true });
-                }
-            } catch (err: any) {
-                if (!abortController.signal.aborted) {
-                    // Even on error, mark as loaded so we don't block forever
-                    dispatch({ type: 'SET_FILTER_OPTIONS_LOADED', payload: true });
-                    handleErrorRef.current(err);
-                }
-            }
-        };
-
-        fetchFilterOptions();
-        return () => abortController.abort();
-    }, [service, state.refreshTrigger, dispatch, handleErrorRef]);
+    useEffect(() => {
+        if (error) {
+            // Even on error, mark as loaded so we don't block forever
+            dispatch({ type: 'SET_FILTER_OPTIONS_LOADED', payload: true });
+        }
+    }, [error, dispatch]);
 };
 
 // ============================================================================
@@ -59,55 +139,49 @@ export const useFilterOptionsEffect = (
 // ============================================================================
 
 /**
- * Hook to fetch scans from API (tabs 0, 1, 2: Scans, Quarantined, Auto Rejected)
+ * Hook to fetch scans from API (tabs 0-3: Scans, Quarantined, Auto Rejected, Errors)
  */
-export const useScansEffect = (
-    service: any,
-    state: ScanState,
-    dispatch: Dispatch<ScanAction>,
-    handleErrorRef: MutableRefObject<(error: any) => void>
-) => {
-    useEffect(() => {
-        // Only fetch scans for tabs 0, 1, 2
-        if (state.selectedTab > 2) {
-            return;
-        }
+export const useScansEffect = (service: any, state: ScanState, dispatch: Dispatch<ScanAction>) => {
+    // For the Quarantined/Auto Rejected tabs there is nothing to show when no
+    // threat scanners / validation types exist, so we skip the request entirely.
+    const noQuarantineData = state.selectedTab === 1 && state.availableThreatScanners.length === 0;
+    const noAutoRejectedData = state.selectedTab === 2 && state.availableValidationTypes.length === 0;
+    const enabled = state.selectedTab <= 3 && state.filterOptionsLoaded && !noQuarantineData && !noAutoRejectedData;
 
-        // Wait for filter options to be loaded to avoid duplicate requests
-        if (!state.filterOptionsLoaded) {
-            return;
-        }
+    const dateParams = getDateRangeParams(state.dateRange);
 
-        // For Quarantined tab, don't fetch if there are no threat scanners available
-        // (we only show scans with threats, so no threat scanners = no data to show)
-        if (state.selectedTab === 1 && state.availableThreatScanners.length === 0) {
-            dispatch({ type: 'SET_SCANS', payload: { scans: [], totalScans: 0 } });
-            dispatch({ type: 'SET_LOADING_SCANS', payload: false });
-            return;
-        }
-
-        // For Auto Rejected tab, don't fetch if there are no validation types available
-        // (we only show scans with validation failures, so no validation types = no data to show)
-        if (state.selectedTab === 2 && state.availableValidationTypes.length === 0) {
-            dispatch({ type: 'SET_SCANS', payload: { scans: [], totalScans: 0 } });
-            dispatch({ type: 'SET_LOADING_SCANS', payload: false });
-            return;
-        }
-
-        const abortController = new AbortController();
-
-        const fetchScans = async () => {
-            // Only show loading state if we don't have existing data to display
-            // This allows seamless background refreshes
-            if (state.scans.length === 0) {
-                dispatch({ type: 'SET_LOADING_SCANS', payload: true });
-            }
-            try {
+    const { data, error, isLoading } = useReportedQuery(
+        useQuery({
+            queryKey: [
+                'admin',
+                'scan',
+                'scans',
+                state.selectedTab,
+                state.currentPage,
+                state.pageSize,
+                state.publisherQuery,
+                state.namespaceQuery,
+                state.nameQuery,
+                Array.from(state.statusFilters),
+                Array.from(state.quarantineFilters),
+                Array.from(state.validationTypeFilters),
+                Array.from(state.threatScannerFilters),
+                state.availableThreatScanners,
+                state.availableValidationTypes,
+                state.dateRange,
+                state.enforcement,
+                state.refreshTrigger
+            ],
+            enabled,
+            staleTime: 0,
+            placeholderData: keepPreviousData,
+            queryFn: async ({ signal }) => {
                 // Determine status filter based on selected tab and status filters
                 let statusParam: string[] | string | undefined;
                 let validationTypeParam: string[] | undefined;
                 let threatScannerParam: string[] | undefined;
                 let adminDecisionParam: string[] | undefined;
+                let exactStatusParam: boolean | undefined;
 
                 if (state.selectedTab === 0) {
                     // Scans tab - use statusFilters, expanding 'running' to explicit statuses
@@ -119,29 +193,31 @@ export const useScansEffect = (
                     }, [] as string[]);
                 } else if (state.selectedTab === 1) {
                     // Quarantined tab - show scans with threats
-                    // Filter by threat scanner (user selection or all available)
                     if (state.threatScannerFilters.size > 0) {
                         threatScannerParam = Array.from(state.threatScannerFilters);
                     } else {
                         threatScannerParam = state.availableThreatScanners;
                     }
-                    // Filter by admin decision status (allowed/blocked/needs-review)
                     if (state.quarantineFilters.size > 0) {
                         adminDecisionParam = Array.from(state.quarantineFilters);
                     }
                 } else if (state.selectedTab === 2) {
                     // Auto Rejected tab - show scans with validation failures
-                    // Filter by validation type (user selection or all available)
                     if (state.validationTypeFilters.size > 0) {
                         validationTypeParam = Array.from(state.validationTypeFilters);
                     } else {
                         validationTypeParam = state.availableValidationTypes;
                     }
+                } else if (state.selectedTab === 3) {
+                    // Errors tab - scans that errored and may need an admin decision
+                    statusParam = ['ERROR'];
+                    exactStatusParam = true;
+                    if (state.quarantineFilters.size > 0) {
+                        adminDecisionParam = Array.from(state.quarantineFilters);
+                    }
                 }
 
-                const dateParams = getDateRangeParams(state.dateRange);
-
-                const response = await service.admin.getAllScans(abortController, {
+                const response = await service.admin.getAllScans(signal, {
                     size: state.pageSize,
                     offset: state.currentPage * state.pageSize,
                     publisher: state.publisherQuery || undefined,
@@ -151,116 +227,49 @@ export const useScansEffect = (
                     validationType: validationTypeParam,
                     threatScannerName: threatScannerParam,
                     adminDecision: adminDecisionParam,
+                    exactStatus: exactStatusParam,
                     dateStartedFrom: dateParams.dateStartedFrom,
                     dateStartedTo: dateParams.dateStartedTo,
                     enforcement: state.enforcement
                 });
 
-                if (!abortController.signal.aborted) {
-                    dispatch({ type: 'SET_LOADING_SCANS', payload: false });
-                    // Convert API response to ScanResult format
-                    const convertedScans: ScanResult[] = response.scans.map((scan: any) => ({
-                        id: scan.id,
-                        displayName: scan.displayName || scan.extensionName,
-                        namespace: scan.namespace,
-                        extensionName: scan.extensionName,
-                        publisher: scan.publisher || '',
-                        publisherUrl: scan.publisherUrl || null,
-                        version: scan.version,
-                        targetPlatform: scan.targetPlatform || 'universal',
-                        universalTargetPlatform: scan.universalTargetPlatform ?? true,
-                        status: scan.status as any,
-                        dateScanStarted: scan.dateScanStarted,
-                        dateScanEnded: scan.dateScanEnded || null,
-                        dateQuarantined: scan.dateQuarantined || null,
-                        dateRejected: scan.dateRejected || null,
-                        adminDecision: scan.adminDecision ? {
-                            decision: scan.adminDecision.decision,
-                            decidedBy: scan.adminDecision.decidedBy,
-                            dateDecided: scan.adminDecision.dateDecided,
-                        } : null,
-                        threats: (scan.threats || []).map((threat: any) => ({
-                            id: threat.id,
-                            fileName: threat.fileName,
-                            fileHash: threat.fileHash,
-                            fileExtension: threat.fileExtension,
-                            type: threat.type,
-                            ruleName: threat.ruleName,
-                            severity: threat.severity,
-                            enforcedFlag: threat.enforcedFlag ?? true,
-                            reason: threat.reason,
-                            dateDetected: threat.dateDetected,
-                        })),
-                        validationFailures: (scan.validationFailures || []).map((failure: any) => ({
-                            id: failure.id,
-                            type: failure.type,
-                            ruleName: failure.ruleName,
-                            reason: failure.reason,
-                            dateDetected: failure.dateDetected,
-                            enforcedFlag: failure.enforcedFlag ?? true,
-                        })),
-                        checkResults: (scan.checkResults || []).map((result: any) => ({
-                            checkType: result.checkType,
-                            category: result.category,
-                            result: result.result,
-                            startedAt: result.startedAt,
-                            completedAt: result.completedAt || null,
-                            durationMs: result.durationMs ?? null,
-                            filesScanned: result.filesScanned || null,
-                            findingsCount: result.findingsCount || null,
-                            summary: result.summary || null,
-                            errorMessage: result.errorMessage || null,
-                            required: result.required ?? null,
-                            externalUrl: result.externalUrl || null,
-                        })),
-                        scannerJobs: (scan.scannerJobs || []).map((job: any) => ({
-                            id: job.id,
-                            scannerType: job.scannerType,
-                            status: job.status,
-                            createdAt: job.createdAt,
-                            updatedAt: job.updatedAt,
-                            errorMessage: job.errorMessage || null,
-                            externalUrl: job.externalUrl || null,
-                        })),
-                        extensionIcon: scan.extensionIcon,
-                        downloadUrl: scan.downloadUrl || null,
-                        errorMessage: scan.errorMessage || null,
-                    }));
-
-                    dispatch({ type: 'SET_SCANS', payload: { scans: convertedScans, totalScans: response.totalSize } });
-                    dispatch({ type: 'SET_LAST_REFRESHED', payload: new Date() });
-                }
-            } catch (err: any) {
-                if (!abortController.signal.aborted) {
-                    dispatch({ type: 'SET_LOADING_SCANS', payload: false });
-                    handleErrorRef.current(err);
-                }
+                return convertScans(response);
             }
-        };
+        }),
+        { action: 'load the scans' }
+    );
 
-        fetchScans();
-        return () => abortController.abort();
-    }, [
-        service,
-        state.filterOptionsLoaded,
-        state.currentPage,
-        state.pageSize,
-        state.publisherQuery,
-        state.namespaceQuery,
-        state.nameQuery,
-        state.selectedTab,
-        state.statusFilters,
-        state.quarantineFilters,
-        state.validationTypeFilters,
-        state.threatScannerFilters,
-        state.availableThreatScanners,
-        state.availableValidationTypes,
-        state.dateRange,
-        state.enforcement,
-        state.refreshTrigger,
-        dispatch,
-        handleErrorRef,
-    ]);
+    useEffect(() => {
+        // When there is nothing to fetch for the current tab, reflect an empty list.
+        if (state.filterOptionsLoaded && (noQuarantineData || noAutoRejectedData)) {
+            dispatch({ type: 'SET_SCANS', payload: { scans: [], totalScans: 0 } });
+            dispatch({ type: 'SET_LOADING_SCANS', payload: false });
+        }
+    }, [state.filterOptionsLoaded, noQuarantineData, noAutoRejectedData, dispatch]);
+
+    useEffect(() => {
+        if (enabled) {
+            dispatch({ type: 'SET_LOADING_SCANS', payload: isLoading });
+        }
+    }, [enabled, isLoading, dispatch]);
+
+    useEffect(() => {
+        if (data) {
+            dispatch({ type: 'SET_SCANS', payload: data });
+            // `keepPreviousData` makes the query's `isLoading` stay false across a key
+            // change once any fetch has ever succeeded, so it never flips the loading
+            // flag `SET_TAB` forced on back to false. Fresh data for the current key is
+            // the reliable signal that the forced spinner can be cleared.
+            dispatch({ type: 'SET_LOADING_SCANS', payload: false });
+            dispatch({ type: 'SET_LAST_REFRESHED', payload: new Date() });
+        }
+    }, [data, dispatch]);
+
+    useEffect(() => {
+        if (error) {
+            dispatch({ type: 'SET_LOADING_SCANS', payload: false });
+        }
+    }, [error, dispatch]);
 };
 
 // ============================================================================
@@ -271,35 +280,37 @@ export const useScansEffect = (
  * Hook to fetch scan counts from API
  * Uses the same tab-aware filtering logic as the scans list
  */
-export const useScanCountsEffect = (
-    service: any,
-    state: ScanState,
-    dispatch: Dispatch<ScanAction>,
-    handleErrorRef: MutableRefObject<(error: any) => void>
-) => {
-    useEffect(() => {
-        const abortController = new AbortController();
+export const useScanCountsEffect = (service: any, state: ScanState, dispatch: Dispatch<ScanAction>) => {
+    const dateParams = getDateRangeParams(state.dateRange);
 
-        const fetchCounts = async () => {
-            try {
-                const dateParams = getDateRangeParams(state.dateRange);
-
+    const { data } = useReportedQuery(
+        useQuery({
+            queryKey: [
+                'admin',
+                'scan',
+                'scan-counts',
+                state.selectedTab,
+                Array.from(state.threatScannerFilters),
+                Array.from(state.validationTypeFilters),
+                state.availableThreatScanners,
+                state.availableValidationTypes,
+                state.dateRange,
+                state.enforcement,
+                state.refreshTrigger
+            ],
+            staleTime: 0,
+            queryFn: async ({ signal }) => {
                 // Determine filters based on selected tab (same logic as scans fetch)
                 let validationTypeParam: string[] | undefined;
                 let threatScannerParam: string[] | undefined;
 
-                if (state.selectedTab === 0) {
-                    // Scans tab - no threatScanner or validationType filters
-                    // (same as scans endpoint which only uses statusFilters on this tab)
-                } else if (state.selectedTab === 1) {
-                    // Quarantined tab - filter by threat scanner (user selection or all available)
+                if (state.selectedTab === 1) {
                     if (state.threatScannerFilters.size > 0) {
                         threatScannerParam = Array.from(state.threatScannerFilters);
                     } else {
                         threatScannerParam = state.availableThreatScanners;
                     }
                 } else if (state.selectedTab === 2) {
-                    // Auto Rejected tab - filter by validation type (user selection or all available)
                     if (state.validationTypeFilters.size > 0) {
                         validationTypeParam = Array.from(state.validationTypeFilters);
                     } else {
@@ -307,38 +318,22 @@ export const useScanCountsEffect = (
                     }
                 }
 
-                const counts = await service.admin.getScanCounts(abortController, {
+                return service.admin.getScanCounts(signal, {
                     ...dateParams,
                     enforcement: state.enforcement,
                     threatScannerName: threatScannerParam,
-                    validationType: validationTypeParam,
+                    validationType: validationTypeParam
                 });
-
-                if (!abortController.signal.aborted) {
-                    dispatch({ type: 'SET_SCAN_COUNTS', payload: counts });
-                }
-            } catch (err: any) {
-                if (!abortController.signal.aborted) {
-                    handleErrorRef.current(err);
-                }
             }
-        };
+        }),
+        { action: 'load the scan counts' }
+    );
 
-        fetchCounts();
-        return () => abortController.abort();
-    }, [
-        service,
-        state.dateRange,
-        state.enforcement,
-        state.threatScannerFilters,
-        state.validationTypeFilters,
-        state.selectedTab,
-        state.availableThreatScanners,
-        state.availableValidationTypes,
-        state.refreshTrigger,
-        dispatch,
-        handleErrorRef,
-    ]);
+    useEffect(() => {
+        if (data) {
+            dispatch({ type: 'SET_SCAN_COUNTS', payload: data });
+        }
+    }, [data, dispatch]);
 };
 
 // ============================================================================
@@ -348,34 +343,32 @@ export const useScanCountsEffect = (
 /**
  * Hook to fetch files from API (tabs 3, 4: Allowed Files, Blocked Files)
  */
-export const useFilesEffect = (
-    service: any,
-    state: ScanState,
-    dispatch: Dispatch<ScanAction>,
-    handleErrorRef: MutableRefObject<(error: any) => void>
-) => {
-    useEffect(() => {
-        // Only fetch files for tabs 3 and 4
-        if (state.selectedTab < 3) {
-            return;
-        }
+export const useFilesEffect = (service: any, state: ScanState, dispatch: Dispatch<ScanAction>) => {
+    const enabled = state.selectedTab >= 4;
+    const dateParams = getFileDateRange(state.fileDateRange);
 
-        const abortController = new AbortController();
+    const { data, error, isLoading } = useReportedQuery(
+        useQuery({
+            queryKey: [
+                'admin',
+                'scan',
+                'files',
+                state.selectedTab,
+                state.currentPage,
+                state.pageSize,
+                state.publisherQuery,
+                state.namespaceQuery,
+                state.nameQuery,
+                state.fileDateRange,
+                state.refreshTrigger
+            ],
+            enabled,
+            staleTime: 0,
+            placeholderData: keepPreviousData,
+            queryFn: async ({ signal }) => {
+                const decisionParam = state.selectedTab === 4 ? 'allowed' : 'blocked';
 
-        const fetchFiles = async () => {
-            // Only show loading state if we don't have existing data to display
-            // (Avoids flashing loading indicator when auto-refreshing)
-            if (state.files.length === 0) {
-                dispatch({ type: 'SET_LOADING_FILES', payload: true });
-            }
-            try {
-                // Determine decision filter based on selected tab
-                const decisionParam = state.selectedTab === 3 ? 'allowed' : 'blocked';
-
-                // Get date range parameters
-                const dateParams = getFileDateRange(state.fileDateRange);
-
-                const response = await service.admin.getFiles(abortController, {
+                const response = await service.admin.getFiles(signal, {
                     size: state.pageSize,
                     offset: state.currentPage * state.pageSize,
                     publisher: state.publisherQuery || undefined,
@@ -383,38 +376,37 @@ export const useFilesEffect = (
                     name: state.nameQuery || undefined,
                     decision: decisionParam,
                     dateDecidedFrom: dateParams.dateDecidedFrom,
-                    dateDecidedTo: dateParams.dateDecidedTo,
+                    dateDecidedTo: dateParams.dateDecidedTo
                 });
 
-                if (!abortController.signal.aborted) {
-                    dispatch({ type: 'SET_LOADING_FILES', payload: false });
-                    dispatch({ type: 'SET_FILES', payload: { files: response.files, totalFiles: response.totalSize } });
-                    dispatch({ type: 'SET_LAST_REFRESHED', payload: new Date() });
-                }
-            } catch (err: any) {
-                if (!abortController.signal.aborted) {
-                    dispatch({ type: 'SET_LOADING_FILES', payload: false });
-                    handleErrorRef.current(err);
-                }
+                return { files: response.files, totalFiles: response.totalSize };
             }
-        };
+        }),
+        { action: 'load the files' }
+    );
 
-        fetchFiles();
-        return () => abortController.abort();
-    }, [
-        service,
-        state.currentPage,
-        state.pageSize,
-        state.publisherQuery,
-        state.namespaceQuery,
-        state.nameQuery,
-        state.selectedTab,
-        state.fileDateRange,
-        state.refreshTrigger,
-        state.files.length,
-        dispatch,
-        handleErrorRef,
-    ]);
+    useEffect(() => {
+        if (enabled) {
+            dispatch({ type: 'SET_LOADING_FILES', payload: isLoading });
+        }
+    }, [enabled, isLoading, dispatch]);
+
+    useEffect(() => {
+        if (data) {
+            dispatch({ type: 'SET_FILES', payload: data });
+            // See the matching comment in useScansEffect: `keepPreviousData` keeps
+            // `isLoading` false across a key change, so the loading flag `SET_TAB`
+            // forces on can only be cleared reliably once fresh data lands.
+            dispatch({ type: 'SET_LOADING_FILES', payload: false });
+            dispatch({ type: 'SET_LAST_REFRESHED', payload: new Date() });
+        }
+    }, [data, dispatch]);
+
+    useEffect(() => {
+        if (error) {
+            dispatch({ type: 'SET_LOADING_FILES', payload: false });
+        }
+    }, [error, dispatch]);
 };
 
 // ============================================================================
@@ -424,50 +416,29 @@ export const useFilesEffect = (
 /**
  * Hook to fetch file counts from API
  */
-export const useFileCountsEffect = (
-    service: any,
-    state: ScanState,
-    dispatch: Dispatch<ScanAction>,
-    handleErrorRef: MutableRefObject<(error: any) => void>
-) => {
-    useEffect(() => {
-        // Only fetch file counts when on file tabs
-        if (state.selectedTab < 3) {
-            return;
-        }
+export const useFileCountsEffect = (service: any, state: ScanState, dispatch: Dispatch<ScanAction>) => {
+    const enabled = state.selectedTab >= 4;
+    const dateParams = getFileDateRange(state.fileDateRange);
 
-        const abortController = new AbortController();
-
-        const fetchFileCounts = async () => {
-            try {
-                // Get date range parameters
-                const dateParams = getFileDateRange(state.fileDateRange);
-
-                const counts = await service.admin.getFileCounts(abortController, {
+    const { data } = useReportedQuery(
+        useQuery({
+            queryKey: ['admin', 'scan', 'file-counts', state.fileDateRange, state.refreshTrigger],
+            enabled,
+            staleTime: 0,
+            queryFn: ({ signal }) =>
+                service.admin.getFileCounts(signal, {
                     dateDecidedFrom: dateParams.dateDecidedFrom,
-                    dateDecidedTo: dateParams.dateDecidedTo,
-                });
+                    dateDecidedTo: dateParams.dateDecidedTo
+                })
+        }),
+        { action: 'load the file counts' }
+    );
 
-                if (!abortController.signal.aborted) {
-                    dispatch({ type: 'SET_FILE_COUNTS', payload: counts });
-                }
-            } catch (err: any) {
-                if (!abortController.signal.aborted) {
-                    handleErrorRef.current(err);
-                }
-            }
-        };
-
-        fetchFileCounts();
-        return () => abortController.abort();
-    }, [
-        service,
-        state.selectedTab,
-        state.fileDateRange,
-        state.refreshTrigger,
-        dispatch,
-        handleErrorRef,
-    ]);
+    useEffect(() => {
+        if (data) {
+            dispatch({ type: 'SET_FILE_COUNTS', payload: data });
+        }
+    }, [data, dispatch]);
 };
 
 // ============================================================================
@@ -477,10 +448,7 @@ export const useFileCountsEffect = (
 /**
  * Hook for periodic refresh - refreshes data every 30 seconds when enabled and page is visible
  */
-export const useAutoRefreshEffect = (
-    state: ScanState,
-    dispatch: Dispatch<ScanAction>
-) => {
+export const useAutoRefreshEffect = (state: ScanState, dispatch: Dispatch<ScanAction>) => {
     useEffect(() => {
         if (!state.autoRefresh) {
             return; // Don't set up interval if auto-refresh is disabled

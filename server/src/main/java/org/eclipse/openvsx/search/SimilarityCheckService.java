@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,25 +6,26 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.search;
 
-import jakarta.validation.constraints.NotNull;
+import java.util.List;
+
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.annotation.Order;
+import org.springframework.stereotype.Service;
+
 import org.eclipse.openvsx.entities.Extension;
 import org.eclipse.openvsx.entities.Namespace;
 import org.eclipse.openvsx.entities.NamespaceMembership;
 import org.eclipse.openvsx.entities.UserData;
 import org.eclipse.openvsx.repositories.RepositoryService;
 import org.eclipse.openvsx.scanning.PublishCheck;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.core.annotation.Order;
-import org.springframework.stereotype.Service;
-
-import jakarta.annotation.Nullable;
-import java.util.List;
 
 /**
  * Central entry point for enforcing similarity rules with configuration-based policy.
@@ -33,7 +34,7 @@ import java.util.List;
  * Implements ValidationCheck to be auto-discovered by ExtensionScanService.
  */
 @Service
-@Order(1)  // Run first: name squatting check
+@Order(1) // Run first: name squatting check
 @ConditionalOnProperty(name = "ovsx.scanning.similarity.enabled", havingValue = "true")
 public class SimilarityCheckService implements PublishCheck {
 
@@ -82,41 +83,41 @@ public class SimilarityCheckService implements PublishCheck {
         var extensionName = scan.getExtensionName();
         var displayName = scan.getExtensionDisplayName();
 
+        // if at least a version exists for that extension (regardless of active state),
+        // do not consider it as a new extension anymore
         if (config.isOnlyCheckNewExtensions() && repositories.countVersions(namespaceName, extensionName) > 0) {
             return PublishCheck.Result.pass();
         }
 
         if (config.isSkipIfPublisherVerified()) {
             var namespace = repositories.findNamespace(namespaceName);
-            if (namespace != null && repositories.hasMemberships(namespace, NamespaceMembership.ROLE_OWNER)) {
+            if (namespace != null && repositories.isVerified(namespace)) {
                 return PublishCheck.Result.pass();
             }
         }
 
         var similarExtensions = findSimilarExtensionsForPublishing(
-            extensionName,
-            namespaceName,
-            displayName,
-            context.user()
-        );
+                extensionName,
+                namespaceName,
+                displayName,
+                context.user());
 
         if (similarExtensions.isEmpty()) {
             return PublishCheck.Result.pass();
         }
 
-        var similarExt = similarExtensions.get(0);
+        var similarExt = similarExtensions.getFirst();
         var latestVersion = repositories.findLatestVersion(similarExt, null, false, true);
         String similarDisplayName = latestVersion != null ? latestVersion.getDisplayName() : null;
 
         var reason = String.format(
-            "Extension '%s.%s' (display name: '%s') is too similar to existing extension '%s.%s' (display name: '%s')",
-            namespaceName,
-            extensionName,
-            displayName,
-            similarExt.getNamespace().getName(),
-            similarExt.getName(),
-            similarDisplayName != null ? similarDisplayName : ""
-        );
+                "Extension '%s.%s' (display name: '%s') is too similar to existing extension '%s.%s' (display name: '%s')",
+                namespaceName,
+                extensionName,
+                displayName,
+                similarExt.getNamespace().getName(),
+                similarExt.getName(),
+                similarDisplayName != null ? similarDisplayName : "");
 
         return PublishCheck.Result.fail("Levenshtein Distance", reason);
     }
@@ -129,17 +130,16 @@ public class SimilarityCheckService implements PublishCheck {
             @Nullable String extensionName,
             @Nullable String namespaceName,
             @Nullable String displayName,
-            @NotNull UserData publishingUser
+            @NonNull UserData publishingUser
     ) {
         return similarityService.findSimilarExtensions(
-            extensionName,
-            namespaceName,
-            displayName,
-            getExcludedNamespaces(publishingUser),
-            config.getSimilarityThreshold(),
-            config.isOnlyProtectVerifiedNames(),
-            LIMIT
-        );
+                extensionName,
+                namespaceName,
+                displayName,
+                getExcludedNamespaces(publishingUser),
+                config.getSimilarityThreshold(),
+                config.isOnlyProtectVerifiedNames(),
+                LIMIT);
     }
 
     /**
@@ -147,16 +147,15 @@ public class SimilarityCheckService implements PublishCheck {
      * Callers should check {@link #isEnabled()} before invoking this method.
      */
     public List<Namespace> findSimilarNamespacesForCreation(
-            @NotNull String namespaceName,
-            @NotNull UserData publishingUser
+            @NonNull String namespaceName,
+            @NonNull UserData publishingUser
     ) {
         return similarityService.findSimilarNamespaces(
-            namespaceName,
-            getExcludedNamespaces(publishingUser),
-            config.getSimilarityThreshold(),
-            config.isOnlyProtectVerifiedNames(),
-            LIMIT
-        );
+                namespaceName,
+                getExcludedNamespaces(publishingUser),
+                config.getSimilarityThreshold(),
+                config.isOnlyProtectVerifiedNames(),
+                LIMIT);
     }
 
     /**
@@ -164,7 +163,7 @@ public class SimilarityCheckService implements PublishCheck {
      * When configured, excludes namespaces where the user is a member (owner OR contributor).
      * This prevents false positives when uploading to namespaces the user legitimately controls.
      */
-    private List<String> getExcludedNamespaces(@NotNull UserData user) {
+    private List<String> getExcludedNamespaces(@NonNull UserData user) {
         if (!config.isAllowSimilarityToOwnNames()) {
             return List.of();
         }
@@ -176,5 +175,3 @@ public class SimilarityCheckService implements PublishCheck {
                 .toList();
     }
 }
-
-

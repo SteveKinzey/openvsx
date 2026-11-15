@@ -1,21 +1,21 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.adapter;
 
+import java.time.ZoneId;
+import java.util.List;
+
 import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.UrlConfigService;
-import org.eclipse.openvsx.entities.Extension;
-import org.eclipse.openvsx.migration.HandlerJobRequest;
-import org.eclipse.openvsx.util.NamingUtil;
-import org.eclipse.openvsx.util.TimeUtil;
-import org.eclipse.openvsx.util.UrlUtil;
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.jobrunr.scheduling.cron.Cron;
 import org.springframework.beans.factory.annotation.Value;
@@ -27,18 +27,21 @@ import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.time.ZoneId;
-import java.util.List;
-import java.util.UUID;
+import org.eclipse.openvsx.UrlConfigService;
+import org.eclipse.openvsx.entities.Extension;
+import org.eclipse.openvsx.migration.HandlerJobRequest;
+import org.eclipse.openvsx.util.NamingUtil;
+import org.eclipse.openvsx.util.TimeUtil;
+import org.eclipse.openvsx.util.UUIDService;
+import org.eclipse.openvsx.util.UrlUtil;
 
 @Service
 public class VSCodeIdService {
-    // TODO: check if this version is still valid when connecting to the VSC Marketplace
-    private static final String API_VERSION = "3.0-preview.1";
 
     private final RestTemplate vsCodeIdRestTemplate;
     private final UrlConfigService urlConfigService;
     private final JobRequestScheduler scheduler;
+    private final UUIDService uuidService;
 
     @Value("${ovsx.data.mirror.enabled:false}")
     boolean mirrorEnabled;
@@ -52,11 +55,13 @@ public class VSCodeIdService {
     public VSCodeIdService(
             RestTemplate vsCodeIdRestTemplate,
             UrlConfigService urlConfigService,
-            JobRequestScheduler scheduler
+            JobRequestScheduler scheduler,
+            UUIDService uuidService
     ) {
         this.vsCodeIdRestTemplate = vsCodeIdRestTemplate;
         this.urlConfigService = urlConfigService;
         this.scheduler = scheduler;
+        this.uuidService = uuidService;
     }
 
     @EventListener
@@ -65,14 +70,20 @@ public class VSCodeIdService {
             return;
         }
         if (updateOnStart) {
-            scheduler.schedule(TimeUtil.getCurrentUTC().plusSeconds(delay), new HandlerJobRequest<>(VSCodeIdDailyUpdateJobRequestHandler.class));
+            scheduler.schedule(
+                    TimeUtil.getCurrentUTC().plusSeconds(delay),
+                    new HandlerJobRequest<>(VSCodeIdDailyUpdateJobRequestHandler.class));
         }
 
-        scheduler.scheduleRecurrently("VSCodeIdDailyUpdate", Cron.daily(3), ZoneId.of("UTC"), new HandlerJobRequest<>(VSCodeIdDailyUpdateJobRequestHandler.class));
+        scheduler.scheduleRecurrently(
+                "VSCodeIdDailyUpdate",
+                Cron.daily(3),
+                ZoneId.of("UTC"),
+                new HandlerJobRequest<>(VSCodeIdDailyUpdateJobRequestHandler.class));
     }
 
     public String getRandomPublicId() {
-        return UUID.randomUUID().toString();
+        return uuidService.generateRandom().toString();
     }
 
     public PublicIds getUpstreamPublicIds(Extension extension) {
@@ -99,8 +110,9 @@ public class VSCodeIdService {
         var requestData = createRequestData(extension);
         var headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
-        headers.set(HttpHeaders.ACCEPT, "application/json;api-version=" + API_VERSION);
-        var result = vsCodeIdRestTemplate.postForObject(requestUrl, new HttpEntity<>(requestData, headers), ExtensionQueryResult.class);
+        headers.set(HttpHeaders.ACCEPT, "application/json;api-version=" + IVSCodeService.GALLERY_API_VERSION);
+        var result = vsCodeIdRestTemplate
+                .postForObject(requestUrl, new HttpEntity<>(requestData, headers), ExtensionQueryResult.class);
         if (result != null && result.results() != null && !result.results().isEmpty()) {
             var item = result.results().getFirst();
             if (item.extensions() != null && !item.extensions().isEmpty()) {
@@ -115,13 +127,10 @@ public class VSCodeIdService {
         var criteria = List.of(
                 new ExtensionQueryParam.Criterion(
                         ExtensionQueryParam.Criterion.FILTER_TARGET,
-                        "Microsoft.VisualStudio.Code"
-                ),
+                        "Microsoft.VisualStudio.Code"),
                 new ExtensionQueryParam.Criterion(
                         ExtensionQueryParam.Criterion.FILTER_EXTENSION_NAME,
-                        NamingUtil.toExtensionId(extension)
-                )
-        );
+                        NamingUtil.toExtensionId(extension)));
 
         return new ExtensionQueryParam(List.of(new ExtensionQueryParam.Filter(criteria, 1, 1, 0, 0)), 0);
     }

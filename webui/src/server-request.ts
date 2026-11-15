@@ -7,10 +7,11 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
-import fetchBuilder from "fetch-retry";
+
+import { isError } from './extension-registry-types';
 
 export interface ServerAPIRequest {
-    abortController: AbortController;
+    signal?: AbortSignal;
     endpoint: string;
     method?: 'GET' | 'DELETE' | 'POST' | 'PUT';
     headers?: Record<string, string>;
@@ -26,9 +27,37 @@ export interface ErrorResponse {
     path?: string;
     timestamp?: string;
     trace?: string;
+    /** On a 429, the seconds the registry asks to wait before the request is sent again. */
+    retryAfter?: number;
 }
 
-export async function sendRequest<Res>(req: ServerAPIRequest, retry: boolean = true): Promise<Res> {
+/** Whether a rejection is the registry's 404, for a page that renders "not found" itself. */
+export const isNotFound = (error: unknown): boolean => (error as Partial<ErrorResponse> | null)?.status === 404;
+
+/** Whether a rejection is the registry's 401, which it answers when a request needs a login and nobody is logged in. */
+export const isUnauthorized = (error: unknown): boolean => (error as Partial<ErrorResponse> | null)?.status === 401;
+
+/**
+ * RFC 9457 `application/problem+json`, which Spring returns for errors it handles itself rather
+ * than through our `ResultJson` shape - a failed `@Min`/`@NotBlank` on a request parameter, say.
+ * It carries none of {@link ErrorResponse}'s fields, so {@link handleError} has to read it too or
+ * every such response reads as an unexplained failure.
+ */
+export interface ProblemDetail {
+    type?: string;
+    title?: string;
+    detail?: string;
+    status?: number;
+    instance?: string;
+    errors?: string[];
+}
+
+/**
+ * Resolves with the parsed body of a 2xx response and rejects with an {@link ErrorResponse}
+ * otherwise, including a 200 whose body is an error result, so a caller never checks
+ * {@link isError} itself. It never retries: the query client owns retries, a 429 included.
+ */
+export async function sendRequest<Res>(req: ServerAPIRequest): Promise<Res> {
     req.method ??= 'GET';
     req.headers ??= {};
     if (!req.headers['Accept']) {
@@ -37,10 +66,12 @@ export async function sendRequest<Res>(req: ServerAPIRequest, retry: boolean = t
 
     const param: RequestInit = {
         method: req.method,
-        signal: req.abortController.signal
+        signal: req.signal
     };
+
     if (req.payload) {
-        param.body = (req.payload instanceof File || req.payload instanceof FormData) ? req.payload : JSON.stringify(req.payload);
+        param.body =
+            req.payload instanceof File || req.payload instanceof FormData ? req.payload : JSON.stringify(req.payload);
     }
     param.headers = req.headers;
     if (req.followRedirect) {
@@ -50,50 +81,45 @@ export async function sendRequest<Res>(req: ServerAPIRequest, retry: boolean = t
         param.credentials = 'include';
     }
 
-    const options: any = retry ? {
-        retries: 10,
-        retryDelay: (attempt: number, error: Error, response: Response) => {
-            return Math.pow(2, attempt) * 1000;
-        },
-        retryOn: (attempt: number, error: Error, response: Response) => {
-            return error !== null || response.status >= 500;
-        }
-    } : {};
-
-    const response = await fetchBuilder(fetch, options)(req.endpoint, param);
+    const response = await fetch(req.endpoint, param);
     if (response.ok) {
-        switch (req.headers['Accept']) {
-            case 'application/json':
-                return response.json();
-            case 'text/plain':
-                return response.text() as Promise<any>;
-            case 'application/octet-stream':
-                return response.blob() as Promise<any>;
-            default:
-                throw new Error(`Unsupported type ${req.headers['Accept']}`);
+        const body = await parseBody(response, req.headers['Accept']);
+        if (isError(body)) {
+            // Carries its status like any other failure, so the query client won't retry an answer.
+            throw { ...body, status: response.status };
         }
-    } else if (response.status === 429) {
-        // if the server uses the bucket4j starter config
-        const retryAfterSeconds = response.headers.get('X-Rate-Limit-Retry-After-Seconds');
-        // if the server uses the dynamic rate limiting config
-        const retryAfter = response.headers.get('Retry-After');
-        const retrySeconds = retryAfterSeconds ?? retryAfter ?? '0';
-        const jitter = Math.floor(Math.random() * 100);
-        const timeoutMillis = ((Number(retrySeconds) + 1) * 1000) + jitter;
-        return new Promise<ServerAPIRequest>(resolve => setTimeout(resolve, timeoutMillis, req))
-            .then(request => sendRequest(request));
-    } else {
-        let err: ErrorResponse;
-        try {
-            err = await response.json();
-            err.status = response.status;
-        } catch (_) {
-            err = {
-                error: `Request failed: ${req.method} ${response.url}`,
-                status: response.status,
-                message: response.statusText || `Status ${response.status}`
-            };
-        }
-        throw err;
+        return body;
+    }
+
+    let err: ErrorResponse;
+    try {
+        err = await response.json();
+        err.status = response.status;
+    } catch (_) {
+        err = {
+            error: `Request failed: ${req.method} ${response.url}`,
+            status: response.status,
+            message: response.statusText || `Status ${response.status}`
+        };
+    }
+    if (response.status === 429) {
+        // The bucket4j starter config sends the first header, dynamic rate limiting the second.
+        const retryAfter =
+            response.headers.get('X-Rate-Limit-Retry-After-Seconds') ?? response.headers.get('Retry-After');
+        err.retryAfter = Number(retryAfter) || 0;
+    }
+    throw err;
+}
+
+function parseBody(response: Response, accept: string): Promise<any> {
+    switch (accept) {
+        case 'application/json':
+            return response.json();
+        case 'text/plain':
+            return response.text();
+        case 'application/octet-stream':
+            return response.blob();
+        default:
+            throw new Error(`Unsupported type ${accept}`);
     }
 }

@@ -1,22 +1,28 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Marshall Walker and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.storage;
 
-import jakarta.annotation.Nullable;
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.net.URI;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.util.List;
+
 import jakarta.annotation.PreDestroy;
 import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.cache.FilesCacheKeyGenerator;
-import org.eclipse.openvsx.entities.FileResource;
-import org.eclipse.openvsx.entities.Namespace;
-import org.eclipse.openvsx.util.FileUtil;
-import org.eclipse.openvsx.util.TempFile;
+import org.jspecify.annotations.Nullable;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.Cacheable;
 import org.springframework.data.util.Pair;
@@ -29,23 +35,24 @@ import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.awscore.defaultsmode.DefaultsMode;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.services.s3.S3Client;
+import software.amazon.awssdk.services.s3.S3Configuration;
 import software.amazon.awssdk.services.s3.endpoints.S3EndpointParams;
 import software.amazon.awssdk.services.s3.endpoints.S3EndpointProvider;
 import software.amazon.awssdk.services.s3.model.CopyObjectRequest;
 import software.amazon.awssdk.services.s3.model.DeleteObjectRequest;
 import software.amazon.awssdk.services.s3.model.GetObjectRequest;
+import software.amazon.awssdk.services.s3.model.HeadObjectRequest;
 import software.amazon.awssdk.services.s3.model.PutObjectRequest;
+import software.amazon.awssdk.services.s3.model.S3Exception;
 import software.amazon.awssdk.services.s3.presigner.S3Presigner;
 import software.amazon.awssdk.services.s3.presigner.model.GetObjectPresignRequest;
 
-import java.io.IOException;
-import java.io.UncheckedIOException;
-import java.net.URI;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
-import java.util.HashMap;
-import java.util.List;
+import org.eclipse.openvsx.cache.FilesCacheKeyGenerator;
+import org.eclipse.openvsx.entities.FileResource;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.util.FileUtil;
+import org.eclipse.openvsx.util.HttpHeadersUtil;
+import org.eclipse.openvsx.util.TempFile;
 
 import static org.eclipse.openvsx.cache.CacheService.CACHE_EXTENSION_FILES;
 import static org.eclipse.openvsx.cache.CacheService.GENERATOR_FILES;
@@ -80,7 +87,10 @@ public class AwsStorageService implements IStorageService {
     private volatile S3Client s3Client;
     private volatile S3Presigner s3Presigner;
 
-    public AwsStorageService(FileCacheDurationConfig fileCacheDurationConfig, FilesCacheKeyGenerator filesCacheKeyGenerator) {
+    public AwsStorageService(
+            FileCacheDurationConfig fileCacheDurationConfig,
+            FilesCacheKeyGenerator filesCacheKeyGenerator
+    ) {
         this.fileCacheDurationConfig = fileCacheDurationConfig;
         this.filesCacheKeyGenerator = filesCacheKeyGenerator;
     }
@@ -90,13 +100,15 @@ public class AwsStorageService implements IStorageService {
         if (s3Presigner != null) {
             try {
                 s3Presigner.close();
-            } catch (RuntimeException _) {}
+            } catch (RuntimeException _) {
+            }
         }
 
         if (s3Client != null) {
             try {
                 s3Client.close();
-            } catch (RuntimeException _) {}
+            } catch (RuntimeException _) {
+            }
         }
     }
 
@@ -132,6 +144,12 @@ public class AwsStorageService implements IStorageService {
                             .region(Region.of(region))
                             .credentialsProvider(getCredentialsProvider());
 
+                    if (pathStyleAccess) {
+                        builder = builder.serviceConfiguration(
+                                S3Configuration.builder()
+                                        .pathStyleAccessEnabled(true)
+                                        .build());
+                    }
                     var serviceEndpoint = getServiceEndpoint();
                     if (serviceEndpoint != null) {
                         builder = builder.endpointOverride(serviceEndpoint);
@@ -164,9 +182,9 @@ public class AwsStorageService implements IStorageService {
     private AwsCredentialsProvider getCredentialsProvider() {
         // Use static credentials if provided, otherwise DefaultCredentialsProvider handles everything
         if (hasStaticCredentials()) {
-            var credentials = hasSessionToken() 
-                ? AwsSessionCredentials.create(accessKeyId, secretAccessKey, sessionToken)
-                : AwsBasicCredentials.create(accessKeyId, secretAccessKey);
+            var credentials = hasSessionToken()
+                    ? AwsSessionCredentials.create(accessKeyId, secretAccessKey, sessionToken)
+                    : AwsBasicCredentials.create(accessKeyId, secretAccessKey);
             return StaticCredentialsProvider.create(credentials);
         }
         return DefaultCredentialsProvider.create();
@@ -186,17 +204,17 @@ public class AwsStorageService implements IStorageService {
         if (StringUtils.isEmpty(region) || StringUtils.isEmpty(bucket)) {
             return false;
         }
-        
+
         // If any credential fields are provided, validate them properly
         boolean hasAccessKey = !StringUtils.isEmpty(accessKeyId);
         boolean hasSecretKey = !StringUtils.isEmpty(secretAccessKey);
         boolean hasSessionToken = !StringUtils.isEmpty(sessionToken);
-        
+
         if (hasAccessKey || hasSecretKey || hasSessionToken) {
             // If any credential is provided, both access key and secret key must be present
             return hasAccessKey && hasSecretKey;
         }
-        
+
         // No static credentials provided - allow AWS default credential provider chain
         return true;
     }
@@ -214,21 +232,26 @@ public class AwsStorageService implements IStorageService {
     }
 
     protected void uploadFile(TempFile file, String fileName, String objectKey) {
-        var metadata = new HashMap<String, String>();
-        metadata.put("Content-Type", StorageUtil.getFileType(fileName).toString());
-        if (fileName.endsWith(".vsix")) {
-            metadata.put("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
-        } else {
-            metadata.put("Cache-Control", StorageUtil.getCacheControl(fileName).getHeaderValue());
+        var headers = HttpHeadersUtil.createFileResponseHeaders(file.getPath(), fileName);
+
+        var builder = PutObjectRequest.builder()
+                .bucket(bucket)
+                .key(objectKey);
+
+        // see https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingMetadata.html
+        if (headers.getContentType() != null) {
+            builder.contentType(headers.getContentType().toString());
         }
 
-        var request = PutObjectRequest.builder()
-                .bucket(bucket)
-                .key(objectKey)
-                .metadata(metadata)
-                .build();
+        if (StringUtils.isNotBlank(headers.getContentDisposition().toString())) {
+            builder.contentDisposition(headers.getContentDisposition().toString());
+        }
 
-        getS3Client().putObject(request, file.getPath());
+        if (headers.getCacheControl() != null) {
+            builder.cacheControl(headers.getCacheControl());
+        }
+
+        getS3Client().putObject(builder.build(), file.getPath());
     }
 
     @Override
@@ -260,7 +283,37 @@ public class AwsStorageService implements IStorageService {
         return getLocation(getObjectKey(namespace));
     }
 
+    /**
+     * {@inheritDoc}
+     * <p>
+     * Percent-encodes the {@code +} that {@link #getObjectKey(FileResource)} leaves in the key: RFC 3986
+     * allows it in a path segment, but S3 (and a CDN in front of it) decodes {@code +} in a path as a
+     * space, which makes every version carrying semver build metadata such as {@code 1.0.0+10}
+     * unresolvable. See <a href="https://github.com/eclipse-openvsx/openvsx/issues/1459">issue 1459</a>.
+     * <p>
+     * The result must only ever be passed to {@link URI#create(String)}: encoding it a second time —
+     * {@code UriUtils.encodePathSegment}, {@code UriComponentsBuilder.encode()},
+     * {@code UriComponents.toUri()} or the multi-argument {@link URI} constructor — escapes the
+     * {@code %} again and produces {@code %252B}.
+     */
+    @Override
+    public String getObjectKeyAsUrlPath(FileResource resource) {
+        return encodeObjectKeyAsUrlPath(getObjectKey(resource));
+    }
+
+    @Override
+    public String getObjectKeyAsUrlPath(Namespace namespace) {
+        return encodeObjectKeyAsUrlPath(getObjectKey(namespace));
+    }
+
+    private String encodeObjectKeyAsUrlPath(String objectKey) {
+        return objectKey.replace("+", "%2B");
+    }
+
     private URI getLocation(String objectKey) {
+        // The presigner encodes the object key itself ('+' becomes %2B) and signs that form, so the key
+        // must be handed over unencoded here: encoding it as well would both double-encode the path and
+        // invalidate the signature.
         var objectRequest = GetObjectRequest.builder()
                 .bucket(bucket)
                 .key(objectKey)
@@ -292,6 +345,31 @@ public class AwsStorageService implements IStorageService {
     }
 
     @Override
+    public long getFileSize(FileResource resource) throws IOException {
+        // headObject is a metadata-only request; it doesn't transfer the object's content.
+        var objectKey = getObjectKey(resource);
+        var request = HeadObjectRequest.builder()
+                .bucket(bucket)
+                .key(objectKey)
+                .build();
+
+        try {
+            return getS3Client().headObject(request).contentLength();
+        } catch (S3Exception e) {
+            // A HEAD response has no body, so S3 can't return a specific error code (e.g. NoSuchKey)
+            // the way it would for a GET -- some implementations throw the specific
+            // NoSuchKeyException regardless, but a plain S3Exception with a 404 status is what's
+            // actually guaranteed, and what e.g. LocalStack sends. Check the status code rather than
+            // the exception type to catch "not found" reliably across implementations.
+            if (e.statusCode() == 404) {
+                throw new FileNotFoundInStorageException("Object not found: " + objectKey, e);
+            }
+
+            throw e;
+        }
+    }
+
+    @Override
     public void copyFiles(List<Pair<FileResource, FileResource>> pairs) {
         pairs.forEach(pair -> copy(getObjectKey(pair.getFirst()), getObjectKey(pair.getSecond())));
     }
@@ -313,7 +391,12 @@ public class AwsStorageService implements IStorageService {
     }
 
     @Override
-    @Cacheable(value = CACHE_EXTENSION_FILES, keyGenerator = GENERATOR_FILES, cacheManager = "fileCacheManager", sync = true)
+    @Cacheable(
+        value = CACHE_EXTENSION_FILES,
+        keyGenerator = GENERATOR_FILES,
+        cacheManager = "fileCacheManager",
+        sync = true
+    )
     public Path getCachedFile(FileResource resource) {
         var objectKey = getObjectKey(resource);
         var request = GetObjectRequest.builder()
@@ -325,7 +408,7 @@ public class AwsStorageService implements IStorageService {
         FileUtil.writeSync(path, p -> {
             try (var stream = getS3Client().getObject(request)) {
                 Files.copy(stream, p);
-            } catch(IOException e) {
+            } catch (IOException e) {
                 throw new UncheckedIOException(e);
             }
         });

@@ -11,35 +11,27 @@
  * SPDX-License-Identifier: EPL-2.0
  *****************************************************************************/
 
-import { ChangeEvent, FunctionComponent, useState } from 'react';
+import { ChangeEvent, FunctionComponent, ReactNode, useState } from 'react';
 import {
-    Button, Dialog, DialogTitle, DialogContent, DialogContentText,
-    Box, TextField, DialogActions, Typography, Paper, IconButton,
-    Tooltip, LinearProgress, styled
+    Button,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogContentText,
+    Box,
+    TextField,
+    DialogActions,
+    IconButton,
+    Tooltip,
+    LinearProgress
 } from '@mui/material';
 import ContentCopyIcon from '@mui/icons-material/ContentCopy';
-import copy from 'clipboard-copy';
+import VisibilityIcon from '@mui/icons-material/Visibility';
+import VisibilityOffIcon from '@mui/icons-material/VisibilityOff';
+import InputAdornment from '@mui/material/InputAdornment';
+import OutlinedInput from '@mui/material/OutlinedInput';
 
 const TOKEN_DESCRIPTION_SIZE = 255;
-
-const StyledDialog = styled(Dialog)({
-    '& .MuiDialog-paper': {
-        width: 480,
-    }
-});
-
-const TokenDisplay = styled(Paper)(({ theme }) => ({
-    display: 'flex',
-    alignItems: 'center',
-    gap: theme.spacing(1),
-    padding: theme.spacing(1.5),
-    wordBreak: 'break-all',
-    fontFamily: 'monospace',
-    fontSize: '0.85rem',
-    backgroundColor: theme.palette.mode === 'dark'
-        ? theme.palette.grey[900]
-        : theme.palette.grey[100],
-}));
 
 export const GenerateTokenDialog: FunctionComponent<GenerateTokenDialogProps> = props => {
     const [loading, setLoading] = useState(false);
@@ -47,8 +39,9 @@ export const GenerateTokenDialog: FunctionComponent<GenerateTokenDialogProps> = 
     const [descriptionError, setDescriptionError] = useState<string>();
     const [tokenValue, setTokenValue] = useState<string>();
     const [copied, setCopied] = useState(false);
+    const [showToken, setShowToken] = useState(false);
 
-    const { open, onClose, title = 'Generate new token' } = props;
+    const { open, onClose, title = 'Generate new token', canGenerate: inputValid = true } = props;
 
     const resetState = () => {
         setLoading(false);
@@ -56,6 +49,7 @@ export const GenerateTokenDialog: FunctionComponent<GenerateTokenDialogProps> = 
         setDescriptionError(undefined);
         setTokenValue(undefined);
         setCopied(false);
+        setShowToken(false);
     };
 
     const handleClose = () => {
@@ -80,8 +74,8 @@ export const GenerateTokenDialog: FunctionComponent<GenerateTokenDialogProps> = 
         try {
             const value = await props.onGenerate(description);
             setTokenValue(value);
-        } catch (err) {
-            props.onError?.(err);
+        } catch {
+            // The caller's `onGenerate` reports its own failure.
         } finally {
             setLoading(false);
         }
@@ -89,79 +83,99 @@ export const GenerateTokenDialog: FunctionComponent<GenerateTokenDialogProps> = 
 
     const handleCopy = () => {
         if (tokenValue) {
-            copy(tokenValue)
-                .then(() => setCopied(true));
+            navigator.clipboard.writeText(tokenValue).then(() => setCopied(true));
             setTimeout(() => setCopied(false), 2000);
         }
     };
 
-    const canGenerate = !descriptionError && !loading;
+    const canGenerate = !descriptionError && !loading && inputValid;
 
-    return <>
-      {open && <StyledDialog open={open} onClose={handleClose}>
-            <DialogTitle>{title}</DialogTitle>
-            {loading && <LinearProgress color='secondary'/>}
-            <DialogContent>
-                {tokenValue ? <>
-                    <DialogContentText sx={{ mb: 2 }}>
-                        Copy this token now. It will not be shown again.
-                    </DialogContentText>
-                    <TokenDisplay variant='outlined'>
-                        <Typography component='span' sx={{ flex: 1, fontFamily: 'inherit', fontSize: 'inherit' }}>
-                            {tokenValue}
-                        </Typography>
-                        <Tooltip title={copied ? 'Copied!' : 'Copy'} placement='top'>
-                            <IconButton size='small' onClick={handleCopy}>
-                                <ContentCopyIcon fontSize='small'/>
-                            </IconButton>
-                        </Tooltip>
-                    </TokenDisplay>
-                </> : <>
-                    <DialogContentText>
-                        You can add an optional description to help identify where this token is used.
-                    </DialogContentText>
-                    <Box mt={2}>
-                        <TextField
-                            autoFocus
-                            fullWidth
-                            label='Description (optional)'
-                            error={Boolean(descriptionError)}
-                            helperText={descriptionError}
-                            value={description}
-                            onChange={handleDescriptionChange}
-                            onKeyDown={e => {
-                                if (e.key === 'Enter' && canGenerate) {
-                                    handleGenerate();
-                                }
-                            }}
-                        />
-                    </Box>
-                </>}
-            </DialogContent>
-            <DialogActions>
-                <Button onClick={handleClose} color='secondary'>
-                    {tokenValue ? 'Close' : 'Cancel'}
-                </Button>
-                {!tokenValue &&
-                    <Button
-                        variant='contained'
-                        color='secondary'
-                        disabled={!canGenerate}
-                        onClick={handleGenerate}
-                    >
-                        Generate Token
-                    </Button>
-                }
-            </DialogActions>
-        </StyledDialog>
-    }
-    </>;
+    return (
+        <>
+            {open && (
+                <Dialog open={open} onClose={handleClose}>
+                    <DialogTitle>{title}</DialogTitle>
+                    {loading && <LinearProgress color='secondary' />}
+                    <DialogContent>
+                        {tokenValue ? (
+                            <>
+                                <DialogContentText sx={{ mb: 2 }}>
+                                    Copy this token now. It will not be shown again.
+                                </DialogContentText>
+                                <OutlinedInput
+                                    fullWidth
+                                    readOnly
+                                    type={showToken ? 'text' : 'password'}
+                                    value={tokenValue}
+                                    sx={{ fontFamily: 'monospace', fontSize: '0.85rem' }}
+                                    endAdornment={
+                                        <InputAdornment position='end'>
+                                            <Tooltip title={showToken ? 'Hide' : 'Show'} placement='top'>
+                                                <IconButton size='small' onClick={() => setShowToken(v => !v)}>
+                                                    {showToken ? (
+                                                        <VisibilityOffIcon fontSize='small' />
+                                                    ) : (
+                                                        <VisibilityIcon fontSize='small' />
+                                                    )}
+                                                </IconButton>
+                                            </Tooltip>
+                                            <Tooltip title={copied ? 'Copied!' : 'Copy'} placement='top'>
+                                                <IconButton size='small' onClick={handleCopy}>
+                                                    <ContentCopyIcon fontSize='small' />
+                                                </IconButton>
+                                            </Tooltip>
+                                        </InputAdornment>
+                                    }
+                                />
+                            </>
+                        ) : (
+                            <>
+                                <DialogContentText>
+                                    You can add an optional description to help identify where this token is used.
+                                </DialogContentText>
+                                <Box mt={2}>
+                                    <TextField
+                                        autoFocus
+                                        fullWidth
+                                        label='Description (optional)'
+                                        error={Boolean(descriptionError)}
+                                        helperText={descriptionError}
+                                        value={description}
+                                        onChange={handleDescriptionChange}
+                                        onKeyDown={e => {
+                                            if (e.key === 'Enter' && canGenerate) {
+                                                handleGenerate();
+                                            }
+                                        }}
+                                    />
+                                </Box>
+                                {props.children}
+                            </>
+                        )}
+                    </DialogContent>
+                    <DialogActions>
+                        <Button onClick={handleClose}>{tokenValue ? 'Close' : 'Cancel'}</Button>
+                        {!tokenValue && (
+                            <Button
+                                variant='contained'
+                                color='secondary'
+                                disabled={!canGenerate}
+                                onClick={handleGenerate}>
+                                Generate Token
+                            </Button>
+                        )}
+                    </DialogActions>
+                </Dialog>
+            )}
+        </>
+    );
 };
 
 export interface GenerateTokenDialogProps {
     open: boolean;
     onClose: () => void;
     onGenerate: (description: string) => Promise<string>;
-    onError?: (err: unknown) => void;
     title?: string;
+    canGenerate?: boolean;
+    children?: ReactNode;
 }

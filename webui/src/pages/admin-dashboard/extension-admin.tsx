@@ -8,112 +8,118 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import { FunctionComponent, useState, useContext, useEffect, useRef } from 'react';
-import { SearchListContainer } from './search-list-container';
-import { ExtensionListSearchfield } from '../extension-list/extension-list-searchfield';
+import { FunctionComponent, useEffect, useState } from 'react';
+import { useNavigate, useParams } from 'react-router';
 import { Button, Typography } from '@mui/material';
-import { MainContext } from '../../context';
-import { isError, Extension, TargetPlatformVersion } from '../../extension-registry-types';
-import { ExtensionVersionContainer } from './extension-version-container';
+
+import { SearchListContainer } from './search-list-container';
 import { StyledInput } from './namespace-input';
-import useQueryParam from '../../hooks/scan-admin/use-query-params-state';
+import { useAdminExtension, useDeleteExtension, usePurgeExtension } from './use-extension-admin';
+import { ExtensionDetailView } from '../../components/extension/extension-detail-view';
+import { AdminDashboardRoutes } from './admin-dashboard-routes';
+import { createRoute } from '../../utils';
+import { isNotFound } from '../../server-request';
 
-export const ExtensionAdmin: FunctionComponent = props => {
-    const abortController = useRef<AbortController>(new AbortController());
+export const ExtensionAdmin: FunctionComponent = () => {
+    const navigate = useNavigate();
+
+    const { namespace: nsParam, extension: extParam } = useParams<{ namespace?: string; extension?: string }>();
+
+    const [namespaceValue, setNamespaceValue] = useState(nsParam ?? '');
+    const [extensionValue, setExtensionValue] = useState(extParam ?? '');
+
     useEffect(() => {
-        return () => {
-            abortController.current.abort();
-        };
-    }, []);
+        setNamespaceValue(nsParam ?? '');
+        setExtensionValue(extParam ?? '');
+    }, [nsParam, extParam]);
 
-    const [loading, setLoading] = useState(false);
-
-    const [extensionValue, setExtensionValue] = useQueryParam('extension', '');
-    const handleExtensionChange = (value: string) => {
-        setExtensionValue(value);
-    };
-
-    const [namespaceValue, setNamespaceValue] = useQueryParam('namespace', '');
-    const handleNamespaceChange = (value: string) => {
-        setNamespaceValue(value);
-    };
-
-    const [error, setError] = useState('');
-
+    const [validationError, setValidationError] = useState('');
     const [extensionFieldError, setExtensionFieldError] = useState(false);
     const [namespaceFieldError, setNamespaceFieldError] = useState(false);
 
-    const { service, handleError } = useContext(MainContext);
-    const [extension, setExtension] = useState<Extension | undefined>(undefined);
-    const findExtension = async () => {
+    const target = nsParam && extParam ? { namespace: nsParam, extension: extParam } : null;
+
+    const { data, isFetching: loading, error: queryError, refetch } = useAdminExtension(target);
+    const { mutateAsync: deleteExtension } = useDeleteExtension();
+    const { mutateAsync: purgeExtension } = usePurgeExtension();
+
+    const extension = queryError ? undefined : data;
+    const fetchError = isNotFound(queryError) ? `Extension not found: ${target?.namespace}.${target?.extension}` : '';
+    const error = validationError || fetchError;
+
+    const findExtension = () => {
         if (!namespaceValue) {
             setNamespaceFieldError(true);
-            setError('Name of Namespace is mandatory');
+            setValidationError('Name of Namespace is mandatory');
             return;
         }
         setNamespaceFieldError(false);
         if (!extensionValue) {
             setExtensionFieldError(true);
-            setError('Name of Extension is mandatory');
+            setValidationError('Name of Extension is mandatory');
             return;
         }
         setExtensionFieldError(false);
-        try {
-            setLoading(true);
-            const extensionDetail = await service.admin.getExtension(abortController.current, namespaceValue, extensionValue);
-            if (isError(extensionDetail)) {
-                throw extensionDetail;
-            }
-            setExtension(extensionDetail);
-            setError('');
-            setLoading(false);
-        } catch (err) {
-            if (err && err.status === 404) {
-                setError(`Extension not found: ${namespaceValue}.${extensionValue}`);
-                setExtension(undefined);
-            } else {
-                handleError(err);
-            }
-            setLoading(false);
+        setValidationError('');
+        if (nsParam === namespaceValue && extParam === extensionValue) {
+            refetch();
+        } else {
+            navigate(createRoute([AdminDashboardRoutes.EXTENSION_ADMIN, namespaceValue, extensionValue]));
         }
     };
 
-    const onRemove = async (targetPlatformVersions?: TargetPlatformVersion[]) => {
-        if (extension == null) {
-            return;
-        }
-
-        await service.admin.deleteExtensions(abortController.current, { namespace: extension.namespace, extension: extension.name, targetPlatformVersions: targetPlatformVersions?.map(({ version, targetPlatform }) => ({ version, targetPlatform })) });
-        await findExtension();
-    };
-
-    return <SearchListContainer
-        searchContainer={[
-            <StyledInput
-                placeholder='Namespace'
-                error={namespaceFieldError}
-                key='nsi'
-                onChange={handleNamespaceChange}
-                value={namespaceValue}
-                hideIconButton={true}
-                autoFocus={true} />,
-            <ExtensionListSearchfield
-                error={extensionFieldError}
-                key='ei'
-                onSearchChanged={handleExtensionChange}
-                searchQuery={extensionValue}
-                onSearchSubmit={findExtension}
-                placeholder='Extension'
-                hideIconButton={true}
-                autoFocus={false} />,
-            <Button key='btn' variant='contained' onClick={findExtension}>Search Extension</Button>,
-            error ? <Typography color='error'>{error}</Typography> : ''
-        ]}
-        listContainer={
-            extension ?
-                <ExtensionVersionContainer onRemove={onRemove} extension={extension} />
-                : ''
-        }
-        loading={loading}
-    />;
+    return (
+        <SearchListContainer
+            searchContainer={[
+                <StyledInput
+                    placeholder='Namespace'
+                    error={namespaceFieldError}
+                    key='nsi'
+                    onChange={setNamespaceValue}
+                    value={namespaceValue}
+                    hideIconButton={true}
+                    autoFocus={true}
+                />,
+                <StyledInput
+                    error={extensionFieldError}
+                    key='ei'
+                    onChange={setExtensionValue}
+                    value={extensionValue}
+                    onSubmit={findExtension}
+                    placeholder='Extension'
+                    hideIconButton={true}
+                    autoFocus={false}
+                />,
+                <Button key='btn' variant='contained' onClick={findExtension}>
+                    Search Extension
+                </Button>,
+                error ? <Typography color='error'>{error}</Typography> : ''
+            ]}
+            listContainer={
+                extension ? (
+                    <ExtensionDetailView
+                        extension={extension}
+                        onRemoveVersion={targets =>
+                            deleteExtension({
+                                namespace: extension.namespace,
+                                extension: extension.name,
+                                targetPlatformVersions: targets
+                            })
+                        }
+                        onPurgeVersion={targets =>
+                            purgeExtension({
+                                namespace: extension.namespace,
+                                extension: extension.name,
+                                targetPlatformVersions: targets
+                            })
+                        }
+                        onVersionDeleted={refetch}
+                    />
+                ) : (
+                    ''
+                )
+            }
+            loading={loading}
+        />
+    );
 };

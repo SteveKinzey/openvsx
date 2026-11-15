@@ -1,17 +1,20 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2023 Ericsson and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.security;
 
-import org.springframework.boot.context.properties.ConfigurationProperties;
-
 import java.util.*;
+
+import org.springframework.boot.context.properties.ConfigurationProperties;
 
 /**
  * Configuration example:
@@ -30,8 +33,8 @@ import java.util.*;
 @ConfigurationProperties(prefix = "ovsx.oauth2")
 public record OAuth2AttributesConfig(Map<String, OAuth2AttributesMapping> attributeNames) {
     private static final Map<String, OAuth2AttributesMapping> DEFAULT_MAPPINGS = Map.of(
-            "github", new OAuth2AttributesMapping("avatar_url", "email", "name", "login", "html_url")
-    );
+            "github",
+            new OAuth2AttributesMapping("avatar_url", "email", "name", "login", "html_url"));
 
     public OAuth2AttributesMapping getAttributeMapping(String provider) {
         return Optional.ofNullable(attributeNames).map(a -> a.get(provider)).orElse(DEFAULT_MAPPINGS.get(provider));

@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,16 +6,17 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
+
+import org.jspecify.annotations.NonNull;
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -88,8 +89,7 @@ class ScannerTest {
         var threat = new Scanner.Threat("test", null, "LOW");
         var result = Scanner.Result.withThreats(List.of(threat));
 
-        assertThrows(UnsupportedOperationException.class, () ->
-                result.getThreats().clear());
+        assertThrows(UnsupportedOperationException.class, () -> result.getThreats().clear());
     }
 
     @Test
@@ -115,6 +115,25 @@ class ScannerTest {
         assertFalse(result.isClean());
         assertEquals(1, result.getThreats().size());
         assertEquals("Verdict: malicious", result.getSummary());
+        assertNull(result.isMalicious());
+    }
+
+    @Test
+    void result_maliciousVerdictHelpers() {
+        var benign = Scanner.Result.of(
+                List.of(new Scanner.Threat("rule", "details", "LOW")),
+                "Looks fine",
+                false);
+        assertTrue(benign.hasBenignVerdict());
+        assertFalse(benign.hasMaliciousVerdict());
+        assertEquals(Boolean.FALSE, benign.isMalicious());
+        assertTrue(benign.isClean()); // benign verdict overrides the raw finding count
+
+        var malicious = Scanner.Result.of(List.of(), "Malicious package", true);
+        assertTrue(malicious.hasMaliciousVerdict());
+        assertFalse(malicious.hasBenignVerdict());
+        assertFalse(malicious.isClean()); // malicious verdict is never clean, even with no findings
+        assertEquals(Boolean.TRUE, malicious.isMalicious());
     }
 
     // === Scanner default methods ===
@@ -125,9 +144,18 @@ class ScannerTest {
         // checks, self-hosted services without a dashboard). They simply don't
         // contribute a "View in scanner" deep link.
         Scanner scanner = new Scanner() {
-            @Override public @jakarta.annotation.Nonnull String getScannerType() { return "TEST"; }
-            @Override public boolean isAsync() { return false; }
-            @Override public @jakarta.annotation.Nonnull Scanner.Invocation startScan(@jakarta.annotation.Nonnull Command command) { throw new UnsupportedOperationException(); }
+            @Override
+            public @NonNull String getScannerType() {
+                return "TEST";
+            }
+            @Override
+            public boolean isAsync() {
+                return false;
+            }
+            @Override
+            public Scanner.@NonNull Invocation startScan(@NonNull Command command) {
+                throw new UnsupportedOperationException();
+            }
         };
 
         assertNull(scanner.buildExternalUrl("any-job-id"));
@@ -162,8 +190,7 @@ class ScannerTest {
                 "Malware detected",
                 "CRITICAL",
                 "bin/payload.exe",
-                "abc123def456"
-        );
+                "abc123def456");
 
         assertEquals("malware", threat.getName());
         assertEquals("Malware detected", threat.getDescription());

@@ -1,23 +1,27 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.adapter;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.net.URI;
+import java.nio.file.Files;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
+
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.ExtensionValidator;
-import org.eclipse.openvsx.UpstreamProxyService;
-import org.eclipse.openvsx.UrlConfigService;
-import org.eclipse.openvsx.util.HttpHeadersUtil;
-import org.eclipse.openvsx.util.NotFoundException;
-import org.eclipse.openvsx.util.TempFile;
+import org.jspecify.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.*;
@@ -29,13 +33,14 @@ import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 import org.springframework.web.util.UriComponentsBuilder;
+import tools.jackson.databind.json.JsonMapper;
 
-import java.io.IOException;
-import java.net.URI;
-import java.nio.file.Files;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Optional;
+import org.eclipse.openvsx.ExtensionValidator;
+import org.eclipse.openvsx.UpstreamProxyService;
+import org.eclipse.openvsx.UrlConfigService;
+import org.eclipse.openvsx.util.HttpHeadersUtil;
+import org.eclipse.openvsx.util.NotFoundException;
+import org.eclipse.openvsx.util.TempFile;
 
 @Service
 public class UpstreamVSCodeService implements IVSCodeService {
@@ -50,6 +55,7 @@ public class UpstreamVSCodeService implements IVSCodeService {
     private final RestTemplate nonRedirectingRestTemplate;
     private final UrlConfigService urlConfigService;
     private final ExtensionValidator extensionValidator;
+    private final JsonMapper jsonMapper;
 
     public UpstreamVSCodeService(
             RestTemplate restTemplate,
@@ -63,6 +69,7 @@ public class UpstreamVSCodeService implements IVSCodeService {
         this.nonRedirectingRestTemplate = nonRedirectingRestTemplate;
         this.urlConfigService = urlConfigService;
         this.extensionValidator = extensionValidator;
+        this.jsonMapper = JsonMapper.shared();
     }
 
     public boolean isValid() {
@@ -72,11 +79,15 @@ public class UpstreamVSCodeService implements IVSCodeService {
     @Override
     public ExtensionQueryResult extensionQuery(ExtensionQueryParam param, int defaultPageSize) {
         var urlTemplate = urlConfigService.getUpstreamUrl() + "/vscode/gallery/extensionquery";
-        var request = new RequestEntity<>(param, HttpHeadersUtil.getForwardedHeaders(), HttpMethod.POST, URI.create(urlTemplate));
+        var request = new RequestEntity<>(
+                param,
+                HttpHeadersUtil.getForwardedHeaders(),
+                HttpMethod.POST,
+                URI.create(urlTemplate));
         ResponseEntity<ExtensionQueryResult> response;
         try {
             response = restTemplate.exchange(request, ExtensionQueryResult.class);
-        } catch(RestClientException exc) {
+        } catch (RestClientException exc) {
             throw propagateRestException(exc, request.getMethod(), urlTemplate, null);
         }
 
@@ -107,10 +118,12 @@ public class UpstreamVSCodeService implements IVSCodeService {
         }
 
         var urlTemplate = urlConfigService.getUpstreamUrl() + "/vscode/gallery/{namespace}/{extension}/latest";
-        var uriVariables = new HashMap<>(Map.of(
-                VAR_NAMESPACE, namespaceName,
-                VAR_EXTENSION, extensionName
-        ));
+        var uriVariables = new HashMap<>(
+                Map.of(
+                        VAR_NAMESPACE,
+                        namespaceName,
+                        VAR_EXTENSION,
+                        extensionName));
 
         URI url = restTemplate.getUriTemplateHandler().expand(urlTemplate, uriVariables);
         var request = new RequestEntity<>(HttpHeadersUtil.getForwardedHeaders(), HttpMethod.GET, url);
@@ -134,13 +147,23 @@ public class UpstreamVSCodeService implements IVSCodeService {
     }
 
     @Override
-    public ResponseEntity<StreamingResponseBody> browse(String namespaceName, String extensionName, String version, String path) {
-        var urlBuilder = new StringBuilder(urlConfigService.getUpstreamUrl() + "/vscode/unpkg/{namespace}/{extension}/{version}");
-        var uriVariables = new HashMap<>(Map.of(
-            VAR_NAMESPACE, namespaceName,
-            VAR_EXTENSION, extensionName,
-            VAR_VERSION, version
-        ));
+    public ResponseEntity<StreamingResponseBody> browse(
+            String namespaceName,
+            String extensionName,
+            String version,
+            String targetPlatform,
+            String path
+    ) {
+        var urlBuilder = new StringBuilder(
+                urlConfigService.getUpstreamUrl() + "/vscode/unpkg/{namespace}/{extension}/{version}");
+        var uriVariables = new HashMap<>(
+                Map.of(
+                        VAR_NAMESPACE,
+                        namespaceName,
+                        VAR_EXTENSION,
+                        extensionName,
+                        VAR_VERSION,
+                        version));
 
         if (StringUtils.isNotBlank(path)) {
             var segments = path.split("/");
@@ -151,76 +174,82 @@ public class UpstreamVSCodeService implements IVSCodeService {
             }
         }
 
+        // As a query parameter rather than the `<version>+<target>` form the client may have used:
+        // both are accepted upstream, and this one needs no escaping decisions.
+        if (StringUtils.isNotBlank(targetPlatform)) {
+            urlBuilder.append("?target={target}");
+            uriVariables.put("target", targetPlatform);
+        }
+
         var method = HttpMethod.GET;
         var urlTemplate = urlBuilder.toString();
         var responseHandler = new ResponseExtractor<ResponseEntity<StreamingResponseBody>>() {
             @Override
             public ResponseEntity<StreamingResponseBody> extractData(ClientHttpResponse response) throws IOException {
                 var statusCode = response.getStatusCode();
-                if(statusCode.isError() && statusCode != HttpStatus.NOT_FOUND) {
+                if (statusCode.isError() && statusCode != HttpStatus.NOT_FOUND) {
                     handleResponseError(urlTemplate, uriVariables, response);
                 }
 
                 var failed = !statusCode.is2xxSuccessful() && !statusCode.is3xxRedirection();
-                if(failed) {
+                if (failed) {
                     throw new NotFoundException();
                 }
 
-                var headers = new HttpHeaders();
-                headers.addAll(response.getHeaders());
-                headers.remove(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN);
-                headers.remove(HttpHeaders.VARY);
-
-                if (proxy != null && MediaType.APPLICATION_JSON.equals(headers.getContentType())) {
-                    var mapper = new ObjectMapper();
-                    var json = proxy.rewriteUrls(mapper.readTree(response.getBody()));
+                if (proxy != null && MediaType.APPLICATION_JSON.equals(response.getHeaders().getContentType())) {
+                    var json = proxy.rewriteUrls(jsonMapper.readTree(response.getBody()));
                     return ResponseEntity.status(statusCode)
-                            .headers(headers)
-                            .body(outputStream -> mapper.writeValue(outputStream, json));
+                            .headers(HttpHeadersUtil.createJsonFileResponseHeaders())
+                            .body(outputStream -> jsonMapper.writeValue(outputStream, json));
                 } else {
-                    return streamResponse(response, headers, "browse");
+                    return streamResponse(response, org.springframework.util.StringUtils.getFilename(path), "browse");
                 }
             }
         };
 
         try {
-            return nonRedirectingRestTemplate.execute(urlBuilder.toString(), method, null, responseHandler, uriVariables);
-        } catch(RestClientException exc) {
+            return nonRedirectingRestTemplate
+                    .execute(urlBuilder.toString(), method, null, responseHandler, uriVariables);
+        } catch (RestClientException exc) {
             throw propagateRestException(exc, method, urlBuilder.toString(), uriVariables);
         }
     }
 
     @Override
     public String download(String namespace, String extension, String version, String targetPlatform) {
-        var urlTemplate = urlConfigService.getUpstreamUrl() + "/vscode/gallery/publishers/{namespace}/vsextensions/{extension}/{version}/vspackage?targetPlatform={targetPlatform}";
+        var urlTemplate = urlConfigService.getUpstreamUrl()
+                + "/vscode/gallery/publishers/{namespace}/vsextensions/{extension}/{version}/vspackage?targetPlatform={targetPlatform}";
         var uriVariables = Map.of(
-                VAR_NAMESPACE, namespace,
-                VAR_EXTENSION, extension,
-                VAR_VERSION, version,
-                "targetPlatform", targetPlatform
-        );
+                VAR_NAMESPACE,
+                namespace,
+                VAR_EXTENSION,
+                extension,
+                VAR_VERSION,
+                version,
+                "targetPlatform",
+                targetPlatform);
 
         ResponseEntity<Void> response;
         var method = HttpMethod.GET;
         try {
             response = nonRedirectingRestTemplate.exchange(urlTemplate, method, null, Void.class, uriVariables);
-        } catch(RestClientException exc) {
+        } catch (RestClientException exc) {
             throw propagateRestException(exc, method, urlTemplate, uriVariables);
         }
 
         URI location = null;
         var statusCode = response.getStatusCode();
-        if(statusCode.is3xxRedirection()) {
+        if (statusCode.is3xxRedirection()) {
             location = response.getHeaders().getLocation();
         }
-        if(statusCode.isError() && statusCode != HttpStatus.NOT_FOUND) {
+        if (statusCode.isError() && statusCode != HttpStatus.NOT_FOUND) {
             handleResponseError(urlTemplate, uriVariables, response);
         }
-        if(location == null) {
+        if (location == null) {
             throw new NotFoundException();
         }
 
-        if(proxy != null) {
+        if (proxy != null) {
             location = proxy.rewriteUrl(location);
         }
         return location.toString();
@@ -241,34 +270,46 @@ public class UpstreamVSCodeService implements IVSCodeService {
 
         URI location = null;
         var statusCode = response.getStatusCode();
-        if(statusCode.is3xxRedirection()) {
+        if (statusCode.is3xxRedirection()) {
             location = response.getHeaders().getLocation();
         }
-        if(statusCode.isError() && statusCode != HttpStatus.NOT_FOUND) {
+        if (statusCode.isError() && statusCode != HttpStatus.NOT_FOUND) {
             handleResponseError(urlTemplate, uriVariables, response);
         }
-        if(location == null) {
+        if (location == null) {
             throw new NotFoundException();
         }
 
-        if(proxy != null) {
+        if (proxy != null) {
             location = proxy.rewriteUrl(location);
         }
         return location.toString();
     }
 
     @Override
-    public ResponseEntity<StreamingResponseBody> getAsset(String namespace, String extensionName, String version, String assetType, String targetPlatform, String restOfTheUrl) {
+    public ResponseEntity<StreamingResponseBody> getAsset(
+            String namespace,
+            String extensionName,
+            String version,
+            String assetType,
+            String targetPlatform,
+            String restOfTheUrl
+    ) {
         var urlBuilder = new StringBuilder()
                 .append(urlConfigService.getUpstreamUrl())
                 .append("/vscode/asset/{namespace}/{extension}/{version}/{assetType}");
-        var uriVariables = new HashMap<>(Map.of(
-            VAR_NAMESPACE, namespace,
-            VAR_EXTENSION, extensionName,
-            VAR_VERSION, version,
-            "assetType", assetType,
-            "targetPlatform", targetPlatform
-        ));
+        var uriVariables = new HashMap<>(
+                Map.of(
+                        VAR_NAMESPACE,
+                        namespace,
+                        VAR_EXTENSION,
+                        extensionName,
+                        VAR_VERSION,
+                        version,
+                        "assetType",
+                        assetType,
+                        "targetPlatform",
+                        targetPlatform));
 
         if (StringUtils.isNotBlank(restOfTheUrl)) {
             var segments = restOfTheUrl.split("/");
@@ -306,12 +347,8 @@ public class UpstreamVSCodeService implements IVSCodeService {
                     throw new NotFoundException();
                 }
 
-                var headers = new HttpHeaders();
-                headers.addAll(response.getHeaders());
-                headers.remove(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN);
-                headers.remove(HttpHeaders.VARY);
-
-                return streamResponse(response, headers, "asset");
+                // we cant safely know the filename of the asset, so just pass null
+                return streamResponse(response, null, "asset");
             }
         };
 
@@ -327,11 +364,15 @@ public class UpstreamVSCodeService implements IVSCodeService {
         logger.error("GET {}: {}", url, response);
     }
 
-    private NotFoundException propagateRestException(RestClientException exc, HttpMethod method, String urlTemplate,
-        Map<String, String> uriVariables) {
+    private NotFoundException propagateRestException(
+            RestClientException exc,
+            HttpMethod method,
+            String urlTemplate,
+            Map<String, String> uriVariables
+    ) {
         if (exc instanceof HttpStatusCodeException) {
-            var statusCode = ((HttpStatusCodeException)exc).getStatusCode();
-            if(statusCode == HttpStatus.NOT_FOUND) {
+            var statusCode = ((HttpStatusCodeException) exc).getStatusCode();
+            if (statusCode == HttpStatus.NOT_FOUND) {
                 return new NotFoundException();
             }
         }
@@ -348,7 +389,7 @@ public class UpstreamVSCodeService implements IVSCodeService {
 
     private ResponseEntity<StreamingResponseBody> streamResponse(
             ClientHttpResponse response,
-            HttpHeaders headers,
+            @Nullable String fileName,
             String prefix
     ) throws IOException {
         var tempFile = new TempFile(prefix, null);
@@ -357,14 +398,17 @@ public class UpstreamVSCodeService implements IVSCodeService {
                 response.getBody().transferTo(out);
             }
 
+            var headers = HttpHeadersUtil.createFileResponseHeaders(tempFile.getPath(), fileName);
+
             return ResponseEntity.status(response.getStatusCode())
                     .headers(headers)
                     .body(outputStream -> {
-                        try (var in = Files.newInputStream(tempFile.getPath())) {
+                        // Delete tempFile here, not via try-with-resources on the outer method: this
+                        // lambda runs later, during async response writing, so this is the only place
+                        // that still runs (via close()) if the client aborts mid-transfer.
+                        try (tempFile; var in = Files.newInputStream(tempFile.getPath())) {
                             in.transferTo(outputStream);
                         }
-
-                        IOUtils.closeQuietly(tempFile);
                     });
         } catch (IOException e) {
             IOUtils.closeQuietly(tempFile);

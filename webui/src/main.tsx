@@ -8,130 +8,175 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import { FunctionComponent, ReactNode, useEffect, useState, useRef, lazy, Suspense } from 'react';
+import { FunctionComponent, ReactNode, useCallback, useEffect, useMemo, useState, useRef, lazy, Suspense } from 'react';
 import { CssBaseline } from '@mui/material';
-import { Route, Routes } from 'react-router-dom';
+import { Route, Routes } from 'react-router';
+import { QueryClientProvider } from '@tanstack/react-query';
+import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
+import { AppProviders } from './app-providers';
+import { queryClient } from './query-client';
 import { AdminDashboardRoutes } from './pages/admin-dashboard/admin-dashboard-routes';
 import { ErrorDialog } from './components/error-dialog';
+import { SessionExpiredDialog } from './components/session-expired-dialog';
 import { handleError } from './utils';
 import { ExtensionRegistryService } from './extension-registry-service';
-import { UserData, isError, ReportedError, isSuccess, LoginProviders } from './extension-registry-types';
+import { ReportedError } from './extension-registry-types';
+import { isNotFound, isUnauthorized } from './server-request';
 import { MainContext } from './context';
 import { PageSettings } from './page-settings';
-import { ErrorResponse } from './server-request';
-import { OtherPages } from './other-pages';
+import { AppLayout } from './layout/app-layout';
+import { useAuthError, useCurrentUser, useLoginProviders, useRegistryVersion } from './use-main-queries';
 
 import '../src/main.css';
 
-const AdminDashboard = lazy(() => import('./pages/admin-dashboard/admin-dashboard').then(m => ({ default: m.AdminDashboard })));
+const AdminDashboard = lazy(() =>
+    import('./pages/admin-dashboard/admin-dashboard').then(m => ({ default: m.AdminDashboard }))
+);
 
-export const Main: FunctionComponent<MainProps> = props => {
-    const [user, setUser] = useState<UserData>();
-    const [userLoading, setUserLoading] = useState<boolean>(true);
-    const [loginProviders, setLoginProviders] = useState<Record<string, string> | undefined>(props.loginProviders);
-    const [error, setError] = useState<{message: string, code?: number | string}>();
+// The query client wraps everything else, so the hooks that build MainContext read it like any other hook.
+export const Main: FunctionComponent<MainProps> = props => (
+    <QueryClientProvider client={queryClient}>
+        <MainContent {...props} />
+        <ReactQueryDevtools initialIsOpen={false} />
+    </QueryClientProvider>
+);
+
+const MainContent: FunctionComponent<MainProps> = props => {
+    const [error, setError] = useState<{ title?: string; message: string; code?: number | string }>();
     const [isErrorDialogOpen, setIsErrorDialogOpen] = useState<boolean>(false);
-    const abortController = useRef<AbortController>(new AbortController());
+    // Optional callback to run when the error dialog is dismissed (e.g. re-fetch stale data).
+    const errorDialogOnClose = useRef<(() => void) | undefined>(undefined);
+    const [hasAuthError] = useState(() => new URLSearchParams(window.location.search).has('auth-error'));
+    const [sessionDialogDismissed, setSessionDialogDismissed] = useState(false);
+    const sessionDialogDismissedRef = useRef(false);
+    const { user, userError, userLoading, loggedOut, sessionExpired, refetchUser, confirmSessionExpiry } =
+        useCurrentUser(props.service);
+    // A restored session gets its dialog back the next time it expires.
+    if (!sessionExpired && sessionDialogDismissed) {
+        setSessionDialogDismissed(false);
+    }
+    useEffect(() => {
+        if (!sessionExpired) {
+            sessionDialogDismissedRef.current = false;
+        }
+    }, [sessionExpired]);
+    const { data: registryLoginProviders } = useLoginProviders(props.service, {
+        enabled: props.loginProviders == null
+    });
+    const { error: authError } = useAuthError(props.service, { enabled: hasAuthError });
+    const { data: version } = useRegistryVersion(props.service);
+
+    const loginProviders = props.loginProviders ?? registryLoginProviders ?? undefined;
+
+    const onError = useCallback(
+        (err: unknown, options?: { onClose?: () => void; title?: string }) => {
+            if (err instanceof DOMException && err.message.trim() === 'The operation was aborted.') {
+                // an aborted request is not a failure to report
+                return;
+            }
+
+            const report = () => {
+                const message = handleError(err);
+                const code = (err as ReportedError).code;
+                errorDialogOnClose.current = options?.onClose;
+                setError({ title: options?.title, message, code });
+                setIsErrorDialogOpen(true);
+            };
+            if (!isUnauthorized(err)) {
+                report();
+                return;
+            }
+            // the session-expired dialog explains a 401 while it is open; any other 401 is a failure to report
+            void confirmSessionExpiry().then(expired => {
+                if (!expired || sessionDialogDismissedRef.current) {
+                    report();
+                }
+            });
+        },
+        [confirmSessionExpiry]
+    );
 
     useEffect(() => {
-        getLoginProviders();
-
-        // If there was an authentication error, get the message from the server and show it
-        const searchParams = new URLSearchParams(window.location.search);
-        if (searchParams.has('auth-error')) {
-            props.service.getUserAuthError(abortController.current).then(onError);
+        if (userError && !loggedOut) {
+            onError(userError, { title: 'Couldn’t load your account' });
         }
+    }, [userError, loggedOut, onError]);
 
-        // Get data of the currently logged in user
-        updateUser();
-
-        return () => abortController.current.abort();
-    }, []);
-
-    const updateUser = async () => {
-        try {
-            setUserLoading(true);
-            const user = await props.service.getUser(abortController.current);
-            if (isError(user)) {
-                // An error result with HTTP OK status indicates that the user is not logged in.
-                setUser(undefined);
-            } else {
-                setUser(user as UserData);
-            }
-        } catch (err) {
-            onError(err);
+    // A 404 means the session holds no login error any more, e.g. a stale `?auth-error` URL.
+    useEffect(() => {
+        if (authError && !isNotFound(authError)) {
+            onError(authError, { title: 'Couldn’t log you in' });
         }
+    }, [authError, onError]);
 
-        setUserLoading(false);
-    };
-
-    const getLoginProviders = async () => {
-        if (props.loginProviders != null) {
-            return;
-        }
-
-        const data = await props.service.getLoginProviders(abortController.current);
-        if (isSuccess(data)) {
-            console.log(data.success);
-        } else {
-            setLoginProviders((data as LoginProviders).loginProviders);
-        }
-    };
-
-    const onError = (err: Error | Partial<ErrorResponse> | ReportedError) => {
-        if (err instanceof DOMException && err.message.trim() === 'The operation was aborted.') {
-            // ignore error caused by AbortController.abort()
-            return;
-        }
-
-        const message = handleError(err);
-        const code = (err as ReportedError).code;
-        setError({ message, code });
-        setIsErrorDialogOpen(true);
-    };
+    // Memoized because it is part of mainContext; a fresh function would defeat that memo.
+    const updateUser = useCallback(() => {
+        refetchUser();
+    }, [refetchUser]);
 
     const onErrorDialogClose = () => {
         setIsErrorDialogOpen(false);
+        const onClose = errorDialogOnClose.current;
+        errorDialogOnClose.current = undefined;
+        onClose?.();
     };
 
     const renderPageContent = (): ReactNode => {
         const { mainHeadTags: MainHeadTagsComponent } = props.pageSettings.elements;
-        return <>
-            { MainHeadTagsComponent ? <MainHeadTagsComponent pageSettings={props.pageSettings}/> : null }
-            <Routes>
-                <Route path={AdminDashboardRoutes.MAIN + '/*'} element={
-                    <Suspense fallback={null}>
-                        <AdminDashboard userLoading={userLoading} />
-                    </Suspense>
-                } />
-                <Route path='*' element={<OtherPages user={user} userLoading={userLoading} />} />
-            </Routes>
-            {
-                error ?
+        return (
+            <>
+                {MainHeadTagsComponent ? <MainHeadTagsComponent pageSettings={props.pageSettings} /> : null}
+                <Routes>
+                    <Route
+                        path={AdminDashboardRoutes.MAIN + '/*'}
+                        element={
+                            <Suspense fallback={null}>
+                                <AdminDashboard userLoading={userLoading} />
+                            </Suspense>
+                        }
+                    />
+                    <Route path='*' element={<AppLayout userLoading={userLoading} />} />
+                </Routes>
+                {error ? (
                     <ErrorDialog
+                        title={error.title}
                         errorMessage={error.message}
                         errorCode={error.code}
                         isErrorDialogOpen={isErrorDialogOpen}
-                        handleCloseDialog={onErrorDialogClose} />
-                    : null
-            }
-        </>;
+                        handleCloseDialog={onErrorDialogClose}
+                    />
+                ) : null}
+                <SessionExpiredDialog
+                    open={sessionExpired && !sessionDialogDismissed}
+                    loginProviders={loginProviders}
+                    onClose={() => {
+                        sessionDialogDismissedRef.current = true;
+                        setSessionDialogDismissed(true);
+                    }}
+                />
+            </>
+        );
     };
 
-    const mainContext: MainContext = {
-        service: props.service,
-        pageSettings: props.pageSettings,
-        user,
-        updateUser,
-        loginProviders,
-        handleError: onError
-    };
-    return <>
-        <CssBaseline />
-        <MainContext.Provider value={mainContext}>
-            {renderPageContent()}
-        </MainContext.Provider>
-    </>;
+    const mainContext = useMemo<MainContext>(
+        () => ({
+            service: props.service,
+            pageSettings: props.pageSettings,
+            user,
+            userLoading,
+            updateUser,
+            loginProviders,
+            handleError: onError,
+            version
+        }),
+        [props.service, props.pageSettings, user, userLoading, updateUser, loginProviders, onError, version]
+    );
+    return (
+        <>
+            <CssBaseline />
+            <AppProviders mainContext={mainContext}>{renderPageContent()}</AppProviders>
+        </>
+    );
 };
 
 export interface MainProps {

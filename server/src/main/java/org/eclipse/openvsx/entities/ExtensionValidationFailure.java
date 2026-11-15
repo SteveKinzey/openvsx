@@ -1,24 +1,25 @@
-/********************************************************************************
- * Copyright (c) 2026 Contributors to the Eclipse Foundation 
+/******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
- * See the NOTICE file(s) distributed with this work for additional 
+ * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
- * This program and the accompanying materials are made available under the 
+ * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
- * SPDX-License-Identifier: EPL-2.0 
- ********************************************************************************/
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
-
-import jakarta.persistence.*;
-import org.eclipse.openvsx.util.TimeUtil;
 
 import java.io.Serial;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.Objects;
+
+import jakarta.persistence.*;
+
+import org.eclipse.openvsx.util.TimeUtil;
 
 /**
  * Records validation failures detected during pre-validation phase.
@@ -32,7 +33,11 @@ public class ExtensionValidationFailure implements Serializable {
 
     @Id
     @GeneratedValue(generator = "extensionValidationFailureSeq")
-    @SequenceGenerator(name = "extensionValidationFailureSeq", sequenceName = "extension_validation_failure_seq", allocationSize = 1)
+    @SequenceGenerator(
+        name = "extensionValidationFailureSeq",
+        sequenceName = "extension_validation_failure_seq",
+        allocationSize = 1
+    )
     private long id;
 
     /** Reference to the parent scan that this failure belongs to */
@@ -40,7 +45,7 @@ public class ExtensionValidationFailure implements Serializable {
     @JoinColumn(name = "scan_id", nullable = false)
     private ExtensionScan scan;
 
-    /** 
+    /**
      * Type of validation check that failed.
      * This is a flexible string field to allow new validation types without code changes.
      * Use CHECK_TYPE constants from ValidationCheck implementations.
@@ -140,8 +145,12 @@ public class ExtensionValidationFailure implements Serializable {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         ExtensionValidationFailure that = (ExtensionValidationFailure) o;
         return id == that.id
                 && Objects.equals(getId(scan), getId(that.scan))
@@ -154,12 +163,17 @@ public class ExtensionValidationFailure implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, getId(scan), checkType, ruleName, 
-                validationFailureReason, enforced, detectedAt);
+        return Objects.hash(
+                id,
+                getId(scan),
+                checkType,
+                ruleName,
+                validationFailureReason,
+                enforced,
+                detectedAt);
     }
 
     private Long getId(ExtensionScan scan) {
         return scan != null ? scan.getId() : null;
     }
 }
-

@@ -10,21 +10,37 @@ plugins {
     alias(libs.plugins.test.logger)
     alias(libs.plugins.gatling)
     alias(libs.plugins.rewrite)
+    alias(libs.plugins.spotless)
     id 'maven-publish'
 }
 
 def jooqSrcDir = 'src/main/jooq-gen'
-
-ext['junit-jupiter.version'] = libs.versions.junit.get()
 
 // override spring boot managed versions
 // see https://docs.spring.io/spring-boot/gradle-plugin/managing-dependencies.html
 // example:
 // ext['netty.version'] = '4.1.132.Final'
 
-ext['postgresql.version'] = '42.7.11'
-ext['netty.version'] = '4.1.135.Final'
-ext['opentelemetry.version'] = '1.63.0'
+// Note: these versions below "deviate" from Spring Boot's managed versions because we want to use newer versions
+// This means that on Spring Boot update, we need to re-check the versions here and update or remove them if needed.
+//
+// scripts/dependency-override-check.sh discovers this ext[...] block itself and fails if any entry
+// has fallen behind the version Spring Boot's BOM manages; run it with --latest to also
+// (non-fatally) check them against the latest upstream releases. Nothing to update there when
+// adding or removing an override here.
+
+ext['flyway.version'] = libs.versions.flyway.get()
+ext['httpclient5.version'] = libs.versions.httpclient5.get()
+ext['httpcore5.version'] = libs.versions.httpcore5.get()
+ext['jackson-2-bom.version'] = libs.versions.jackson2.get()
+ext['jackson-bom.version'] = libs.versions.jackson.get()
+ext['jetty.version'] = libs.versions.jetty.get()
+ext['jooq.version'] = libs.versions.jooq.get()
+ext['log4j2.version'] = libs.versions.log4j2.get()
+ext['logback.version'] = libs.versions.logback.get()
+ext['netty.version'] = libs.versions.netty.get()
+ext['opentelemetry.version'] = libs.versions.opentelemetry.get()
+ext['postgresql.version'] = libs.versions.postgresql.get()
 
 java {
     sourceCompatibility = libs.versions.java.get()
@@ -49,33 +65,21 @@ configurations {
     devImplementation.extendsFrom implementation
     devRuntimeOnly.extendsFrom runtimeOnly
 
-    // exclude commons-logging to avoid runtime warnings like these
-    // Standard Commons Logging discovery in action with spring-jcl:
-    //    please remove commons-logging.jar from classpath in order to avoid potential conflicts
-    configureEach {
-        exclude group: "commons-logging", module: "commons-logging"
-    }
-
-    // Gatling 3.15 requires Netty 4.2.x but Spring Boot's dependency management forces 4.1.x.
-    // Override all io.netty modules (except tcnative which has its own versioning) on the
-    // gatling configuration to keep its classpath internally consistent.
-    matching { it.name.startsWith('gatling') }.configureEach {
-        resolutionStrategy.eachDependency { details ->
-            if (details.requested.group == 'io.netty' && !details.requested.name.startsWith('netty-tcnative')) {
-                details.useVersion '4.2.13.Final'
-            }
-        }
-    }
+    testImplementation.exclude group: 'com.vaadin.external.google', module: 'android-json'
 }
 
 dependencies {
-    implementation "org.springframework.boot:spring-boot-starter-web"
+    implementation "org.springframework.boot:spring-boot-starter-webmvc"
     implementation "org.springframework.boot:spring-boot-starter-jetty"
     modules {
         module("org.springframework.boot:spring-boot-starter-tomcat") {
             replacedBy("org.springframework.boot:spring-boot-starter-jetty")
         }
     }
+    // Only a transitive runtime dependency of spring-boot-starter-jetty otherwise; needed at compile
+    // time to reconfigure the installed CompressionHandler in VSCodeGalleryCompressionConfig.
+    implementation "org.eclipse.jetty.compression:jetty-compression-server"
+    implementation "org.springframework.boot:spring-boot-starter-restclient"
     implementation "org.springframework.boot:spring-boot-starter-validation"
     implementation "org.springframework.boot:spring-boot-starter-jooq"
     implementation "org.springframework.boot:spring-boot-starter-data-jpa"
@@ -84,13 +88,20 @@ dependencies {
     implementation "org.springframework.boot:spring-boot-starter-security"
     implementation "org.springframework.boot:spring-boot-starter-actuator"
     implementation "org.springframework.boot:spring-boot-starter-cache"
-    implementation "org.springframework.boot:spring-boot-starter-aop"
     implementation "org.springframework.boot:spring-boot-starter-mail"
-    implementation "org.springframework.boot:spring-boot-starter-thymeleaf"
-    implementation "org.springframework.security:spring-security-oauth2-client"
+    implementation "org.springframework.boot:spring-boot-starter-zipkin"
+    implementation "org.springframework.boot:spring-boot-starter-session-jdbc"
+
+    implementation "org.springframework.boot:spring-boot-security-oauth2-client"
     implementation "org.springframework.security:spring-security-oauth2-jose"
-    implementation "org.springframework.session:spring-session-jdbc"
-    implementation "org.springframework.retry:spring-retry"
+
+    // Depend directly on Thymeleaf rather than org.springframework.boot:spring-boot-thymeleaf
+    // (the autoconfiguration module - see JacksonConfig-adjacent notes in MailConfig): the app
+    // only uses Thymeleaf for rendering mail templates and builds its own SpringTemplateEngine
+    // bean for that, so ThymeleafAutoConfiguration's ThymeleafViewResolver (which would resolve
+    // Spring MVC view names, e.g. the "error" view, through the same mail template resolver)
+    // never needs to exist in the first place. No spring.autoconfigure.exclude required.
+    implementation "org.thymeleaf:thymeleaf-spring6"
 
     implementation "org.apache.httpcomponents.client5:httpclient5"
     implementation "com.github.ben-manes.caffeine:caffeine"
@@ -98,18 +109,19 @@ dependencies {
 
     implementation "io.micrometer:micrometer-tracing"
     implementation "io.micrometer:micrometer-tracing-bridge-otel"
-    implementation "io.opentelemetry:opentelemetry-exporter-zipkin"
+    implementation libs.opentelemetry.exporter.zipkin
 
     implementation libs.commons.lang3
     implementation libs.bouncycastle
     implementation libs.jedis
+    implementation libs.uuid.generator
 
     implementation libs.bucket4j.spring
-    implementation libs.bucket4j.redis
-    implementation libs.ipaddress
+    implementation libs.bucket4j.jedis
 
     implementation libs.jobrunr.spring
 
+    implementation "org.springframework.boot:spring-boot-flyway"
     implementation libs.flyway.core
     implementation libs.flyway.database.postgresql
 
@@ -120,22 +132,12 @@ dependencies {
 
     implementation libs.springdoc
 
-    implementation libs.jackson.core
-    implementation libs.jackson.annotations
-    implementation libs.jackson.databind
-    implementation libs.jackson.jaxb.annotations
-    implementation libs.jackson.dataformat.xml
     implementation libs.jackson.dataformat.yaml
+    implementation libs.jackson.dataformat.xml
     implementation libs.jackson.dataformat.toml
-
-    implementation libs.woodstox.core
-
-    implementation libs.jaxb.api
-    implementation libs.jaxb.impl
 
     implementation libs.tika.core
     implementation libs.re2j
-    implementation libs.json.path
     implementation libs.loki.logback.appender
 
     runtimeOnly "io.micrometer:micrometer-registry-prometheus"
@@ -147,14 +149,14 @@ dependencies {
     testImplementation("org.springframework.boot:spring-boot-starter-test") {
         exclude group: 'org.junit.vintage', module: 'junit-vintage-engine'
     }
+    testImplementation "org.springframework.boot:spring-boot-starter-webmvc-test"
     testImplementation "org.springframework.security:spring-security-test"
-    testImplementation libs.junit.jupiter.api
+
+    testImplementation "org.springframework.boot:spring-boot-testcontainers"
     testImplementation libs.testcontainers.elasticsearch
     testImplementation libs.testcontainers.localstack
     testImplementation libs.testcontainers.junit.jupiter
-
-    testRuntimeOnly libs.junit.jupiter.engine
-    testRuntimeOnly libs.testcontainers.postgresql
+    testImplementation libs.testcontainers.postgresql
 
     gatling libs.gatling.core
     gatling libs.gatling.app
@@ -164,7 +166,13 @@ dependencies {
 
 configurations.configureEach {
     resolutionStrategy {
-        force 'org.apache.commons:commons-compress:1.26.0+'
+        // due to security vulnerabilities in commons-compress < 1.26.0
+        // see: https://commons.apache.org/proper/commons-compress/security.html
+        force 'org.apache.commons:commons-compress:[1.26.0,2.0)'
+        // pulled in from elasticsearch-java, resolution rule added because of CVE-2026-9563
+        force 'org.eclipse.parsson:parsson:[1.1.8,2.0)'
+        // pulled in from google-cloud-storage, resolution rule added because of GHSA-xxph-c9ww-hj94
+        force 'com.google.guava:guava:33.7.2-jre'
     }
 }
 
@@ -183,7 +191,11 @@ jooq {
                 name = 'org.jooq.meta.postgres.PostgresDatabase'
                 inputSchema = 'public'
                 includes = '.*'
-                excludes = 'jobrunr.*'
+                // jobrunr's and flyway's own bookkeeping tables. They are owned by those tools,
+                // nothing here queries them, and flyway_schema_history in particular only exists in
+                // a database flyway has already migrated - so generating it makes the committed
+                // output depend on how the schema was built rather than on the migrations.
+                excludes = 'jobrunr.*|flyway_schema_history'
                 includeRoutines = false
             }
             target {
@@ -202,16 +214,50 @@ jooq {
 }
 
 rewrite {
-    activeRecipe("org.openrewrite.java.migrate.jakarta.JavaxAnnotationMigrationToJakartaAnnotation")
+    activeRecipe("org.openrewrite.java.jspecify.MigrateFromJakartaAnnotationApi")
     setExportDatatables(true)
 }
 
 publishing {
     publications {
         maven(MavenPublication) {
-            artifact ('scripts/run-server.sh') 
+            artifact ('scripts/run-server.sh')
             artifact bootJar
         }
+    }
+}
+
+spotless {
+    // keep spotlessCheck/spotlessApply opt-in only - do not gate check/build/test on formatting
+    enforceCheck = false
+
+    // optional: limit format enforcement to just the files changed by this feature branch
+    // ratchetFrom 'origin/main'
+
+    java {
+        // matches jbang-fmt.args: only server non-generated sources, excludes jooq-gen
+        target 'src/main/java/**/*.java', 'src/test/java/**/*.java'
+
+        // shared with scripts/ImportSort.java (the jbang path) so both stay in sync
+        importOrderFile('config/import-order.importorder')
+
+        // shared with scripts/AddBracesFix.java (the jbang path) via buildSrc, see
+        // buildSrc/src/main/java/AddBracesFixStep.java - runs before the Eclipse
+        // formatter step below so the braces it adds get properly indented/positioned
+        addStep(AddBracesFixStep.create())
+
+        // no lockfile is bundled yet for 4.41 in spotless-lib-extra, so this provisions jdt.core
+        // live from Eclipse's P2 repository instead of a pinned/reproducible dependency set - see
+        // AGENTS.md's "The formatter's versions have one source of truth"
+        eclipse('4.41').configFile('config/eclipse-java-formatter.xml')
+
+        // shared with scripts/ClosingBraceFix.java (the jbang path) via buildSrc,
+        // see buildSrc/src/main/java/ClosingBraceFixStep.java
+        addStep(ClosingBraceFixStep.create())
+
+        // shared with scripts/LicenseHeaderHarmonize.java (the jbang path) via buildSrc,
+        // see buildSrc/src/main/java/LicenseHeaderHarmonizeStep.java
+        addStep(LicenseHeaderHarmonizeStep.create())
     }
 }
 
@@ -225,21 +271,48 @@ tasks.register('runServer', JavaExec) {
     mainClass = 'org.eclipse.openvsx.RegistryApplication'
 }
 
+testlogger {
+    // By default only frames of the test class itself are shown, which hides where a failure
+    // actually originated - useless for diagnosing failures that only reproduce on CI.
+    showFullStackTraces = true
+}
+
 test {
-    jvmArgs = ['--enable-native-access=ALL-UNNAMED', '-Xmx4096m'] // due to https://github.com/netty/netty/issues/15161
+    // -Xmx raised from 4096m: the full suite caches many distinct Spring test contexts
+    // (@SpringBootTest/@WebMvcTest each get their own), and 4 GB was occasionally too tight,
+    // observed as an OutOfMemoryError during unrelated context bootstrapping on CI.
+    jvmArgs = ['--enable-native-access=ALL-UNNAMED', '-Xmx6144m', '-Xshare:off'] // due to https://github.com/netty/netty/issues/15161
     useJUnitPlatform()
+
+    // registry tests run on plain postgres, analytics tests on timescale/timescaledb; override
+    // either image with -Dovsx.test.postgres.image=... / -Dovsx.test.timeseries.image=...
+    ['ovsx.test.postgres.image', 'ovsx.test.timeseries.image'].each { property ->
+        if (System.getProperty(property) != null) {
+            systemProperty property, System.getProperty(property)
+        }
+    }
+
+    // junit-platform.properties lets test classes fan out one thread per core (a local machine has no
+    // reason to hold back), but GitHub Actions runners have less memory to absorb several heavy
+    // @SpringBootTest contexts building at once - a system property here overrides that file's
+    // `dynamic` strategy. CI sets the CI env var itself; this isn't something to set by hand locally.
+    if (System.getenv('CI') != null) {
+        systemProperty 'junit.jupiter.execution.parallel.config.strategy', 'fixed'
+        systemProperty 'junit.jupiter.execution.parallel.config.fixed.parallelism', '2'
+    }
 }
 
 tasks.register('unitTests', Test) {
-    description = 'Runs unit tests (excluding integration tests).'
+    description = 'Runs unit tests (excluding container-backed integration tests).'
     group = 'verification'
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
-    useJUnitPlatform()
-    exclude 'org/eclipse/openvsx/IntegrationTest.class'
-    exclude 'org/eclipse/openvsx/cache/CacheServiceTest.class'
-    exclude 'org/eclipse/openvsx/repositories/RepositoryServiceSmokeTest.class'
-    exclude 'org/eclipse/openvsx/storage/AwsStorageServiceIntegrationTest.class'
+    // Exclude container-backed tests by tag rather than a hand-maintained class list: any test that
+    // extends AbstractPostgresContainerTest (or is otherwise tagged "integration") is skipped here, so
+    // this fast task never spins up a Docker container. New integration tests are covered automatically.
+    useJUnitPlatform {
+        excludeTags 'integration'
+    }
 }
 
 tasks.register('s3IntegrationTests', Test) {
@@ -247,8 +320,11 @@ tasks.register('s3IntegrationTests', Test) {
     group = 'verification'
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
-    useJUnitPlatform()
-    include 'org/eclipse/openvsx/storage/AwsStorageServiceIntegrationTest.class'
+    // Select S3 integration tests by tag rather than a hardcoded class name, so new tests tagged "s3"
+    // are picked up automatically.
+    useJUnitPlatform {
+        includeTags 's3'
+    }
 
     // Set system properties for test configuration
     systemProperty 'spring.profiles.active', 's3-integration'

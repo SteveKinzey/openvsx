@@ -15,9 +15,14 @@ import { alert } from '@mdit/plugin-alert';
 import DOMPurify from 'dompurify';
 import { Theme, styled } from '@mui/material/styles';
 import linkIcon from './link-icon';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 
 const Markdown = styled('div')(({ theme }: { theme: Theme }) => ({
+    // The container owns the leading gap; the first block shouldn't add its own
+    // heading/paragraph margin on top of it.
+    '& > :first-of-type': {
+        marginTop: 0
+    },
     '& a': {
         textDecoration: 'none',
         color: theme.palette.secondary.main,
@@ -66,6 +71,8 @@ const Markdown = styled('div')(({ theme }: { theme: Theme }) => ({
     '& table': {
         borderCollapse: 'collapse',
         borderSpacing: 0,
+        display: 'block',
+        overflowX: 'auto',
         '& tr, & td, & th': {
             border: '1px solid #ddd'
         },
@@ -97,7 +104,7 @@ const Markdown = styled('div')(({ theme }: { theme: Theme }) => ({
             content: '" "',
             width: '16px',
             height: '16px',
-            marginRight: '8px',
+            marginRight: '8px'
         },
         '& p': {
             margin: 0
@@ -156,7 +163,6 @@ const Markdown = styled('div')(({ theme }: { theme: Theme }) => ({
 }));
 
 export const SanitizedMarkdown: FunctionComponent<SanitizedMarkdownProps> = ({ content, sanitize, linkify }) => {
-
     const markdownIt = new MarkdownIt({
         html: true,
         linkify: true,
@@ -186,8 +192,7 @@ export const SanitizedMarkdown: FunctionComponent<SanitizedMarkdownProps> = ({ c
     }, []);
 
     const renderedMd = markdownIt.render(content);
-    const sanitized = sanitize === undefined || sanitize
-        ? DOMPurify.sanitize(renderedMd) : renderedMd;
+    const sanitized = sanitize === undefined || sanitize ? DOMPurify.sanitize(renderedMd) : renderedMd;
 
     return <Markdown dangerouslySetInnerHTML={{ __html: sanitized }} />;
 };

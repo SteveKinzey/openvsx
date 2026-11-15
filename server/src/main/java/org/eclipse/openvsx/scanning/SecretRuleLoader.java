@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,22 +6,11 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import com.fasterxml.jackson.annotation.JsonProperty;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
-import jakarta.validation.constraints.NotNull;
-import jakarta.annotation.Nullable;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.core.io.ClassPathResource;
-import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -32,6 +21,16 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.io.ClassPathResource;
+import org.springframework.stereotype.Component;
+import tools.jackson.dataformat.yaml.YAMLMapper;
+
 /**
  * Loads secret detection rules from a YAML file.
  * Only loaded when secret detection is enabled via configuration.
@@ -41,47 +40,22 @@ import java.util.Map;
 public class SecretRuleLoader {
 
     private static final Logger logger = LoggerFactory.getLogger(SecretRuleLoader.class);
-    private final ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
+    private final YAMLMapper yamlMapper = YAMLMapper.builder().build();
 
     /**
      * Container for loaded rules and global allowlist configuration.
      * <p>
      * This is returned by {@link #loadAll(List)} and contains:
-     *   Compiled secret detection rules from all YAML files (deduplicated by ID)
-     *   Global allowlist configuration from the last YAML file
+     * Compiled secret detection rules from all YAML files (deduplicated by ID)
+     * Global allowlist configuration from the last YAML file
      */
-    public static class LoadedRules {
-        private final List<SecretRule> rules;
-        private final GlobalAllowlist globalAllowlist;
-
-        /**
-         * Create a container for loaded rules and global allowlist.
-         */
-        public LoadedRules(@NotNull List<SecretRule> rules, @Nullable GlobalAllowlist globalAllowlist) {
-            this.rules = rules;
-            this.globalAllowlist = globalAllowlist;
-        }
-
-        /**
-         * Get the compiled secret detection rules.
-         */
-        public @NotNull List<SecretRule> getRules() {
-            return rules;
-        }
-
-        /**
-         * Get the global allowlist configuration.
-         */
-        public @Nullable GlobalAllowlist getGlobalAllowlist() {
-            return globalAllowlist;
-        }
-    }
+    public record LoadedRules(@NonNull List<SecretRule> rules, @Nullable GlobalAllowlist globalAllowlist) {}
 
     /**
      * Load rules from a single path. Supports classpath: prefixed resources or absolute/relative file paths.
      */
-    public List<SecretRule> load(@NotNull String path) {
-        return loadAll(List.of(path)).getRules();
+    public List<SecretRule> load(@NonNull String path) {
+        return loadAll(List.of(path)).rules();
     }
 
     /**
@@ -89,7 +63,7 @@ public class SecretRuleLoader {
      * Later files override earlier ones by rule id.
      * Global allowlists are merged from all files.
      */
-    public LoadedRules loadAll(@NotNull List<String> paths) {
+    public LoadedRules loadAll(@NonNull List<String> paths) {
         if (paths.isEmpty()) {
             logger.warn("Secret detection rules path list is empty");
             return new LoadedRules(List.of(), null);
@@ -130,8 +104,8 @@ public class SecretRuleLoader {
 
         // Create combined global allowlist if any items were found
         GlobalAllowlist combinedAllowlist = null;
-        if (!allPaths.isEmpty() || !allRegexes.isEmpty() || !allStopwords.isEmpty() || 
-            !allFileExtensions.isEmpty() || !allSkipMimeTypes.isEmpty()) {
+        if (!allPaths.isEmpty() || !allRegexes.isEmpty() || !allStopwords.isEmpty() ||
+                !allFileExtensions.isEmpty() || !allSkipMimeTypes.isEmpty()) {
             combinedAllowlist = new GlobalAllowlist();
             combinedAllowlist.paths = allPaths;
             combinedAllowlist.regexes = allRegexes;
@@ -147,17 +121,9 @@ public class SecretRuleLoader {
     /**
      * Internal container for data loaded from a single YAML file.
      */
-    private static class RuleFileData {
-        final List<SecretRule> rules;
-        final GlobalAllowlist globalAllowlist;
+    private record RuleFileData(List<SecretRule> rules, GlobalAllowlist globalAllowlist) {}
 
-        RuleFileData(List<SecretRule> rules, GlobalAllowlist globalAllowlist) {
-            this.rules = rules;
-            this.globalAllowlist = globalAllowlist;
-        }
-    }
-
-    private RuleFileData loadSingle(@NotNull String path) {
+    private RuleFileData loadSingle(@NonNull String path) {
         // Fail when we cannot read rules and scanning is enabled.
         if (path.isBlank()) {
             var message = "Secret detection rules path is empty";
@@ -222,8 +188,13 @@ public class SecretRuleLoader {
                 int stopwordCount = globalAllowlist.stopwords != null ? globalAllowlist.stopwords.size() : 0;
                 int extensionCount = globalAllowlist.fileExtensions != null ? globalAllowlist.fileExtensions.size() : 0;
                 int mimeTypeCount = globalAllowlist.skipMimeTypes != null ? globalAllowlist.skipMimeTypes.size() : 0;
-                logger.debug("Loaded global allowlist from YAML: {} paths, {} regexes, {} stopwords, {} file extensions, {} mime-types",
-                        pathCount, regexCount, stopwordCount, extensionCount, mimeTypeCount);
+                logger.debug(
+                        "Loaded global allowlist from YAML: {} paths, {} regexes, {} stopwords, {} file extensions, {} mime-types",
+                        pathCount,
+                        regexCount,
+                        stopwordCount,
+                        extensionCount,
+                        mimeTypeCount);
             }
 
             return new RuleFileData(result, globalAllowlist);
@@ -234,7 +205,7 @@ public class SecretRuleLoader {
         }
     }
 
-    private @Nullable InputStream openStream(@NotNull String path) throws IOException {
+    private @Nullable InputStream openStream(@NonNull String path) throws IOException {
         if (path.startsWith("classpath:")) {
             String cp = path.substring("classpath:".length());
             ClassPathResource resource = new ClassPathResource(cp);
@@ -271,7 +242,7 @@ public class SecretRuleLoader {
     public static class RuleFile {
         /** List of secret detection rules */
         public List<RuleDefinition> rules;
-        
+
         /** Global allowlist configuration that applies to all rules */
         public GlobalAllowlist allowlist;
     }
@@ -284,22 +255,22 @@ public class SecretRuleLoader {
     public static class RuleDefinition {
         /** Unique rule identifier (required) */
         public String id;
-        
+
         /** Human-readable description of what this rule detects */
         public String description;
-        
-        /** Regex pattern to match secrets (required, compiled as case-insensitive) */
+
+        /** Regex pattern to match secrets (required, case-sensitive unless it starts with {@code (?i)}) */
         public String regex;
-        
+
         /** Minimum Shannon entropy threshold (0.0-8.0). Matches below this are filtered out. */
         public Double entropy;
-        
+
         /** Keywords that must appear in a line before applying regex (performance optimization) */
         public List<String> keywords;
-        
+
         /** Rule-specific allowlist patterns to exclude known safe matches */
         public List<Allowlist> allowlists;
-        
+
         /** Capture group index to extract the secret value (default: 1 if available, else 0) */
         public Integer secretGroup;
     }
@@ -331,18 +302,18 @@ public class SecretRuleLoader {
     public static class GlobalAllowlist {
         /** Regex patterns for file paths to exclude (e.g., "node_modules/", "\.test\.") */
         public List<String> paths;
-        
+
         /** Regex patterns for content to exclude as known safe (e.g., "^example$", "test.*") */
         public List<String> regexes;
-        
+
         /** Exact strings to exclude (case-insensitive, e.g., "placeholder", "changeme") */
         public List<String> stopwords;
-        
+
         /** File extensions to skip scanning (e.g., ".png", ".jpg", ".pdf") */
         @JsonProperty("file-extensions")
         public List<String> fileExtensions;
-        
-        /** 
+
+        /**
          * Regex patterns for MIME types to skip during scanning.
          * Uses Apache Tika for content-based MIME detection.
          * Examples: "^image/.*", "^application/x-(elf|msdownload|mach)", "^video/.*"
@@ -351,4 +322,3 @@ public class SecretRuleLoader {
         public List<String> skipMimeTypes;
     }
 }
-

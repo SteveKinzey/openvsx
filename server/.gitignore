@@ -1,11 +1,11 @@
 /bin/
 /build/
+/buildSrc/build
+/build-local/
 
 .gradle/
 .idea/
-.settings/
 .classpath
-.project
 .metals
 .bloop
 

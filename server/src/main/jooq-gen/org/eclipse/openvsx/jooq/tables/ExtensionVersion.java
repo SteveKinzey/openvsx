@@ -17,6 +17,7 @@ import org.jooq.Condition;
 import org.jooq.Field;
 import org.jooq.ForeignKey;
 import org.jooq.Index;
+import org.jooq.JSONB;
 import org.jooq.Name;
 import org.jooq.PlainSQL;
 import org.jooq.QueryPart;
@@ -235,6 +236,36 @@ public class ExtensionVersion extends TableImpl<ExtensionVersionRecord> {
      */
     public final TableField<ExtensionVersionRecord, Boolean> POTENTIALLY_MALICIOUS = createField(DSL.name("potentially_malicious"), SQLDataType.BOOLEAN, this, "");
 
+    /**
+     * The column <code>public.extension_version.removed</code>.
+     */
+    public final TableField<ExtensionVersionRecord, Boolean> REMOVED = createField(DSL.name("removed"), SQLDataType.BOOLEAN.nullable(false), this, "");
+
+    /**
+     * The column <code>public.extension_version.removed_timestamp</code>.
+     */
+    public final TableField<ExtensionVersionRecord, LocalDateTime> REMOVED_TIMESTAMP = createField(DSL.name("removed_timestamp"), SQLDataType.LOCALDATETIME(6), this, "");
+
+    /**
+     * The column <code>public.extension_version.removed_by_id</code>.
+     */
+    public final TableField<ExtensionVersionRecord, Long> REMOVED_BY_ID = createField(DSL.name("removed_by_id"), SQLDataType.BIGINT, this, "");
+
+    /**
+     * The column <code>public.extension_version.published_by_id</code>.
+     */
+    public final TableField<ExtensionVersionRecord, Long> PUBLISHED_BY_ID = createField(DSL.name("published_by_id"), SQLDataType.BIGINT.nullable(false), this, "");
+
+    /**
+     * The column <code>public.extension_version.published_with_tt</code>.
+     */
+    public final TableField<ExtensionVersionRecord, String> PUBLISHED_WITH_TT = createField(DSL.name("published_with_tt"), SQLDataType.VARCHAR(32), this, "");
+
+    /**
+     * The column <code>public.extension_version.published_provenance</code>.
+     */
+    public final TableField<ExtensionVersionRecord, JSONB> PUBLISHED_PROVENANCE = createField(DSL.name("published_provenance"), SQLDataType.JSONB, this, "");
+
     private ExtensionVersion(Name alias, Table<ExtensionVersionRecord> aliased) {
         this(alias, aliased, (Field<?>[]) null, null);
     }
@@ -271,7 +302,7 @@ public class ExtensionVersion extends TableImpl<ExtensionVersionRecord> {
 
     @Override
     public List<Index> getIndexes() {
-        return Arrays.asList(Indexes.EXTENSION_VERSION__EXTENSION_ID__IDX, Indexes.EXTENSION_VERSION__PUBLISHED_WITH_ID__IDX, Indexes.EXTENSION_VERSION_BY_TARGET_PLATFORM_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_LATEST_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_VERSION_LIST_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_VERSION_MAP_ORDER_BY_IDX);
+        return Arrays.asList(Indexes.EXTENSION_VERSION__EXTENSION_ID__IDX, Indexes.EXTENSION_VERSION__PUBLISHED_BY_ID__IDX, Indexes.EXTENSION_VERSION__PUBLISHED_WITH_ID__IDX, Indexes.EXTENSION_VERSION_BY_TARGET_PLATFORM_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_LATEST_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_VERSION_LIST_ORDER_BY_IDX, Indexes.EXTENSION_VERSION_VERSION_MAP_ORDER_BY_IDX);
     }
 
     @Override
@@ -286,7 +317,7 @@ public class ExtensionVersion extends TableImpl<ExtensionVersionRecord> {
 
     @Override
     public List<ForeignKey<ExtensionVersionRecord, ?>> getReferences() {
-        return Arrays.asList(Keys.EXTENSION_VERSION__EXTENSION_VERSION_SIGNATURE_KEY_PAIR_FKEY, Keys.EXTENSION_VERSION__FK70KHJ8PM0VACASUIIAQ0W0R80, Keys.EXTENSION_VERSION__FKKHS1EC9S9J08FGICQ9PMWU6BT);
+        return Arrays.asList(Keys.EXTENSION_VERSION__EXTENSION_VERSION_PUBLISHED_BY_ID_FKEY, Keys.EXTENSION_VERSION__EXTENSION_VERSION_PUBLISHED_WITH_ID_FKEY, Keys.EXTENSION_VERSION__EXTENSION_VERSION_REMOVED_BY_ID_FKEY, Keys.EXTENSION_VERSION__EXTENSION_VERSION_SIGNATURE_KEY_PAIR_FKEY, Keys.EXTENSION_VERSION__FKKHS1EC9S9J08FGICQ9PMWU6BT);
     }
 
     @Override

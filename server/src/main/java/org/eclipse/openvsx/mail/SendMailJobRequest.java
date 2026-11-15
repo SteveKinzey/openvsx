@@ -1,35 +1,48 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Precies. Software OU and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.mail;
+
+import java.util.Map;
 
 import org.jobrunr.jobs.lambdas.JobRequest;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
 
-import java.util.Map;
-
+/**
+ * A {@code JobRequest} to send templated emails.
+ */
 public class SendMailJobRequest implements JobRequest {
 
     private String from;
     private String to;
     private String subject;
     private String template;
-    private Map<String,Object> variables;
 
-    public SendMailJobRequest() {}
+    // FIXME: since using jackson 3, serialization of JobRequest arguments
+    //        is restricted by default, more information at
+    //        <a href="https://www.jobrunr.io/en/documentation/serialization/jackson3/#exploring-alternatives-to-additional-polymorphic-type-validation">...</a>
+    //        RegistryApplication injects a custom Jackson3JsonMapper that also allows subtypes from java.util and java.time
+    //        but we should revisit the variables
+    private Map<String, Object> variables;
+
+    public SendMailJobRequest() {
+    }
 
     public SendMailJobRequest(
             String from,
             String to,
             String subject,
             String template,
-            Map<String,Object> variables
+            Map<String, Object> variables
     ) {
         this.from = from;
         this.to = to;
@@ -75,7 +88,7 @@ public class SendMailJobRequest implements JobRequest {
     }
 
     @Override
-    public Class<? extends JobRequestHandler> getJobRequestHandler() {
+    public Class<? extends JobRequestHandler<?>> getJobRequestHandler() {
         return SendMailJobRequestHandler.class;
     }
 }

@@ -15,34 +15,33 @@ import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopMostActivePublishingUse
 import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopMostDownloadedExtensions;
 import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopNamespaceExtensionVersions;
 import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopNamespaceExtensions;
-import org.eclipse.openvsx.jooq.tables.Customer;
-import org.eclipse.openvsx.jooq.tables.CustomerMembership;
-import org.eclipse.openvsx.jooq.tables.DailyUsageStats;
-import org.eclipse.openvsx.jooq.tables.DownloadCountProcessedItem;
+import org.eclipse.openvsx.jooq.tables.DownloadIngestion;
 import org.eclipse.openvsx.jooq.tables.Extension;
 import org.eclipse.openvsx.jooq.tables.ExtensionReview;
 import org.eclipse.openvsx.jooq.tables.ExtensionScan;
+import org.eclipse.openvsx.jooq.tables.ExtensionSizeOverride;
 import org.eclipse.openvsx.jooq.tables.ExtensionThreat;
 import org.eclipse.openvsx.jooq.tables.ExtensionValidationFailure;
 import org.eclipse.openvsx.jooq.tables.ExtensionVersion;
+import org.eclipse.openvsx.jooq.tables.ExtensionVersionChange;
 import org.eclipse.openvsx.jooq.tables.FileDecision;
 import org.eclipse.openvsx.jooq.tables.FileResource;
-import org.eclipse.openvsx.jooq.tables.FlywaySchemaHistory;
 import org.eclipse.openvsx.jooq.tables.MigrationItem;
 import org.eclipse.openvsx.jooq.tables.Namespace;
 import org.eclipse.openvsx.jooq.tables.NamespaceMembership;
 import org.eclipse.openvsx.jooq.tables.NamespaceSocialLinks;
 import org.eclipse.openvsx.jooq.tables.PersistedLog;
 import org.eclipse.openvsx.jooq.tables.PersonalAccessToken;
-import org.eclipse.openvsx.jooq.tables.RateLimitToken;
+import org.eclipse.openvsx.jooq.tables.PublisherAgreementEvent;
 import org.eclipse.openvsx.jooq.tables.ScanCheckResult;
 import org.eclipse.openvsx.jooq.tables.ScanJob;
+import org.eclipse.openvsx.jooq.tables.Setting;
 import org.eclipse.openvsx.jooq.tables.SignatureKeyPair;
 import org.eclipse.openvsx.jooq.tables.SpringSession;
 import org.eclipse.openvsx.jooq.tables.SpringSessionAttributes;
-import org.eclipse.openvsx.jooq.tables.Tier;
-import org.eclipse.openvsx.jooq.tables.UsageStats;
+import org.eclipse.openvsx.jooq.tables.TrustedPublisher;
 import org.eclipse.openvsx.jooq.tables.UserData;
+import org.eclipse.openvsx.jooq.tables.UserDataPermission;
 import org.jooq.Catalog;
 import org.jooq.Sequence;
 import org.jooq.Table;
@@ -107,24 +106,9 @@ public class Public extends SchemaImpl {
     public final AdminStatisticsTopNamespaceExtensions ADMIN_STATISTICS_TOP_NAMESPACE_EXTENSIONS = AdminStatisticsTopNamespaceExtensions.ADMIN_STATISTICS_TOP_NAMESPACE_EXTENSIONS;
 
     /**
-     * The table <code>public.customer</code>.
+     * The table <code>public.download_ingestion</code>.
      */
-    public final Customer CUSTOMER = Customer.CUSTOMER;
-
-    /**
-     * The table <code>public.customer_membership</code>.
-     */
-    public final CustomerMembership CUSTOMER_MEMBERSHIP = CustomerMembership.CUSTOMER_MEMBERSHIP;
-
-    /**
-     * The table <code>public.daily_usage_stats</code>.
-     */
-    public final DailyUsageStats DAILY_USAGE_STATS = DailyUsageStats.DAILY_USAGE_STATS;
-
-    /**
-     * The table <code>public.download_count_processed_item</code>.
-     */
-    public final DownloadCountProcessedItem DOWNLOAD_COUNT_PROCESSED_ITEM = DownloadCountProcessedItem.DOWNLOAD_COUNT_PROCESSED_ITEM;
+    public final DownloadIngestion DOWNLOAD_INGESTION = DownloadIngestion.DOWNLOAD_INGESTION;
 
     /**
      * The table <code>public.extension</code>.
@@ -142,6 +126,11 @@ public class Public extends SchemaImpl {
     public final ExtensionScan EXTENSION_SCAN = ExtensionScan.EXTENSION_SCAN;
 
     /**
+     * The table <code>public.extension_size_override</code>.
+     */
+    public final ExtensionSizeOverride EXTENSION_SIZE_OVERRIDE = ExtensionSizeOverride.EXTENSION_SIZE_OVERRIDE;
+
+    /**
      * The table <code>public.extension_threat</code>.
      */
     public final ExtensionThreat EXTENSION_THREAT = ExtensionThreat.EXTENSION_THREAT;
@@ -157,6 +146,11 @@ public class Public extends SchemaImpl {
     public final ExtensionVersion EXTENSION_VERSION = ExtensionVersion.EXTENSION_VERSION;
 
     /**
+     * The table <code>public.extension_version_change</code>.
+     */
+    public final ExtensionVersionChange EXTENSION_VERSION_CHANGE = ExtensionVersionChange.EXTENSION_VERSION_CHANGE;
+
+    /**
      * The table <code>public.file_decision</code>.
      */
     public final FileDecision FILE_DECISION = FileDecision.FILE_DECISION;
@@ -165,11 +159,6 @@ public class Public extends SchemaImpl {
      * The table <code>public.file_resource</code>.
      */
     public final FileResource FILE_RESOURCE = FileResource.FILE_RESOURCE;
-
-    /**
-     * The table <code>public.flyway_schema_history</code>.
-     */
-    public final FlywaySchemaHistory FLYWAY_SCHEMA_HISTORY = FlywaySchemaHistory.FLYWAY_SCHEMA_HISTORY;
 
     /**
      * The table <code>public.migration_item</code>.
@@ -202,9 +191,9 @@ public class Public extends SchemaImpl {
     public final PersonalAccessToken PERSONAL_ACCESS_TOKEN = PersonalAccessToken.PERSONAL_ACCESS_TOKEN;
 
     /**
-     * The table <code>public.rate_limit_token</code>.
+     * The table <code>public.publisher_agreement_event</code>.
      */
-    public final RateLimitToken RATE_LIMIT_TOKEN = RateLimitToken.RATE_LIMIT_TOKEN;
+    public final PublisherAgreementEvent PUBLISHER_AGREEMENT_EVENT = PublisherAgreementEvent.PUBLISHER_AGREEMENT_EVENT;
 
     /**
      * Records all check/scan executions for audit trail
@@ -215,6 +204,11 @@ public class Public extends SchemaImpl {
      * The table <code>public.scan_job</code>.
      */
     public final ScanJob SCAN_JOB = ScanJob.SCAN_JOB;
+
+    /**
+     * The table <code>public.setting</code>.
+     */
+    public final Setting SETTING = Setting.SETTING;
 
     /**
      * The table <code>public.signature_key_pair</code>.
@@ -232,19 +226,19 @@ public class Public extends SchemaImpl {
     public final SpringSessionAttributes SPRING_SESSION_ATTRIBUTES = SpringSessionAttributes.SPRING_SESSION_ATTRIBUTES;
 
     /**
-     * The table <code>public.tier</code>.
+     * The table <code>public.trusted_publisher</code>.
      */
-    public final Tier TIER = Tier.TIER;
-
-    /**
-     * The table <code>public.usage_stats</code>.
-     */
-    public final UsageStats USAGE_STATS = UsageStats.USAGE_STATS;
+    public final TrustedPublisher TRUSTED_PUBLISHER = TrustedPublisher.TRUSTED_PUBLISHER;
 
     /**
      * The table <code>public.user_data</code>.
      */
     public final UserData USER_DATA = UserData.USER_DATA;
+
+    /**
+     * The table <code>public.user_data_permission</code>.
+     */
+    public final UserDataPermission USER_DATA_PERMISSION = UserDataPermission.USER_DATA_PERMISSION;
 
     /**
      * No further instances allowed
@@ -264,15 +258,14 @@ public class Public extends SchemaImpl {
         return Arrays.asList(
             Sequences.ADMIN_SCAN_DECISION_SEQ,
             Sequences.ADMIN_STATISTICS_SEQ,
-            Sequences.CUSTOMER_MEMBERSHIP_SEQ,
-            Sequences.CUSTOMER_SEQ,
-            Sequences.DAILY_USAGE_STATS_SEQ,
-            Sequences.DOWNLOAD_COUNT_PROCESSED_ITEM_SEQ,
+            Sequences.DOWNLOAD_INGESTION_SEQ,
             Sequences.EXTENSION_REVIEW_SEQ,
             Sequences.EXTENSION_SCAN_SEQ,
             Sequences.EXTENSION_SEQ,
+            Sequences.EXTENSION_SIZE_OVERRIDE_SEQ,
             Sequences.EXTENSION_THREAT_SEQ,
             Sequences.EXTENSION_VALIDATION_FAILURE_SEQ,
+            Sequences.EXTENSION_VERSION_CHANGE_SEQ,
             Sequences.EXTENSION_VERSION_SEQ,
             Sequences.FILE_DECISION_SEQ,
             Sequences.FILE_RESOURCE_SEQ,
@@ -282,12 +275,12 @@ public class Public extends SchemaImpl {
             Sequences.NAMESPACE_SEQ,
             Sequences.PERSISTED_LOG_SEQ,
             Sequences.PERSONAL_ACCESS_TOKEN_SEQ,
-            Sequences.RATE_LIMIT_TOKEN_SEQ,
+            Sequences.PUBLISHER_AGREEMENT_EVENT_SEQ,
             Sequences.SCAN_CHECK_RESULT_SEQ,
             Sequences.SCAN_JOB_SEQ,
+            Sequences.SETTING_SEQ,
             Sequences.SIGNATURE_KEY_PAIR_SEQ,
-            Sequences.TIER_SEQ,
-            Sequences.USAGE_STATS_SEQ,
+            Sequences.TRUSTED_PUBLISHER_SEQ,
             Sequences.USER_DATA_SEQ
         );
     }
@@ -303,34 +296,33 @@ public class Public extends SchemaImpl {
             AdminStatisticsTopMostDownloadedExtensions.ADMIN_STATISTICS_TOP_MOST_DOWNLOADED_EXTENSIONS,
             AdminStatisticsTopNamespaceExtensionVersions.ADMIN_STATISTICS_TOP_NAMESPACE_EXTENSION_VERSIONS,
             AdminStatisticsTopNamespaceExtensions.ADMIN_STATISTICS_TOP_NAMESPACE_EXTENSIONS,
-            Customer.CUSTOMER,
-            CustomerMembership.CUSTOMER_MEMBERSHIP,
-            DailyUsageStats.DAILY_USAGE_STATS,
-            DownloadCountProcessedItem.DOWNLOAD_COUNT_PROCESSED_ITEM,
+            DownloadIngestion.DOWNLOAD_INGESTION,
             Extension.EXTENSION,
             ExtensionReview.EXTENSION_REVIEW,
             ExtensionScan.EXTENSION_SCAN,
+            ExtensionSizeOverride.EXTENSION_SIZE_OVERRIDE,
             ExtensionThreat.EXTENSION_THREAT,
             ExtensionValidationFailure.EXTENSION_VALIDATION_FAILURE,
             ExtensionVersion.EXTENSION_VERSION,
+            ExtensionVersionChange.EXTENSION_VERSION_CHANGE,
             FileDecision.FILE_DECISION,
             FileResource.FILE_RESOURCE,
-            FlywaySchemaHistory.FLYWAY_SCHEMA_HISTORY,
             MigrationItem.MIGRATION_ITEM,
             Namespace.NAMESPACE,
             NamespaceMembership.NAMESPACE_MEMBERSHIP,
             NamespaceSocialLinks.NAMESPACE_SOCIAL_LINKS,
             PersistedLog.PERSISTED_LOG,
             PersonalAccessToken.PERSONAL_ACCESS_TOKEN,
-            RateLimitToken.RATE_LIMIT_TOKEN,
+            PublisherAgreementEvent.PUBLISHER_AGREEMENT_EVENT,
             ScanCheckResult.SCAN_CHECK_RESULT,
             ScanJob.SCAN_JOB,
+            Setting.SETTING,
             SignatureKeyPair.SIGNATURE_KEY_PAIR,
             SpringSession.SPRING_SESSION,
             SpringSessionAttributes.SPRING_SESSION_ATTRIBUTES,
-            Tier.TIER,
-            UsageStats.USAGE_STATS,
-            UserData.USER_DATA
+            TrustedPublisher.TRUSTED_PUBLISHER,
+            UserData.USER_DATA,
+            UserDataPermission.USER_DATA_PERMISSION
         );
     }
 }

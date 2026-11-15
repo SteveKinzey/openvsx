@@ -1,28 +1,31 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2021 Precies. Software and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.repositories;
-
-import org.eclipse.openvsx.entities.Extension;
-import org.eclipse.openvsx.entities.Namespace;
-import org.eclipse.openvsx.util.ExtensionId;
-import org.eclipse.openvsx.web.SitemapRow;
-import org.jooq.Record;
-import org.jooq.*;
-import org.jooq.impl.DSL;
-import org.springframework.stereotype.Component;
 
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-import java.util.stream.Collectors;
+
+import org.jooq.*;
+import org.jooq.Record;
+import org.jooq.impl.DSL;
+import org.springframework.stereotype.Component;
+
+import org.eclipse.openvsx.entities.Extension;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.util.ExtensionId;
+import org.eclipse.openvsx.web.SitemapRow;
 
 import static org.eclipse.openvsx.jooq.Tables.EXTENSION;
 import static org.eclipse.openvsx.jooq.Tables.EXTENSION_VERSION;
@@ -49,7 +52,7 @@ public class ExtensionJooqRepository {
     public List<Extension> findAllActiveByPublicId(Collection<String> publicIds, String... namespacesToExclude) {
         var conditions = new ArrayList<Condition>();
         conditions.add(EXTENSION.PUBLIC_ID.in(publicIds));
-        for(var namespaceToExclude : namespacesToExclude) {
+        for (var namespaceToExclude : namespacesToExclude) {
             conditions.add(NAMESPACE.NAME.notEqualIgnoreCase(namespaceToExclude));
         }
 
@@ -62,8 +65,7 @@ public class ExtensionJooqRepository {
         var query = findAllActive();
         query.addConditions(
                 EXTENSION.NAME.equalIgnoreCase(name),
-                NAMESPACE.NAME.equalIgnoreCase(namespaceName)
-        );
+                NAMESPACE.NAME.equalIgnoreCase(namespaceName));
 
         return query.fetchOne(this::toExtension);
     }
@@ -76,8 +78,7 @@ public class ExtensionJooqRepository {
         var query = findPublicId();
         query.addConditions(
                 EXTENSION.NAME.equalIgnoreCase(extension),
-                NAMESPACE.NAME.equalIgnoreCase(namespace)
-        );
+                NAMESPACE.NAME.equalIgnoreCase(namespace));
 
         return query.fetchOne(this::toPublicId);
     }
@@ -103,8 +104,7 @@ public class ExtensionJooqRepository {
                 EXTENSION.NAME,
                 NAMESPACE.ID,
                 NAMESPACE.PUBLIC_ID,
-                NAMESPACE.NAME
-        );
+                NAMESPACE.NAME);
 
         query.addFrom(EXTENSION);
         query.addJoin(NAMESPACE, NAMESPACE.ID.eq(EXTENSION.NAMESPACE_ID));
@@ -139,8 +139,7 @@ public class ExtensionJooqRepository {
                 NAMESPACE.ID,
                 NAMESPACE.PUBLIC_ID,
                 NAMESPACE.NAME,
-                NAMESPACE.DISPLAY_NAME
-        );
+                NAMESPACE.DISPLAY_NAME);
 
         query.addFrom(EXTENSION);
         query.addJoin(NAMESPACE, NAMESPACE.ID.eq(EXTENSION.NAMESPACE_ID));
@@ -173,22 +172,15 @@ public class ExtensionJooqRepository {
         return extension;
     }
 
-    public void updatePublicId(long id, String publicId) {
-        dsl.update(EXTENSION)
-                .set(EXTENSION.PUBLIC_ID, publicId)
-                .where(EXTENSION.ID.eq(id))
-                .execute();
-    }
-
     public void updatePublicIds(Map<Long, String> publicIds) {
-        if(publicIds.isEmpty()) {
+        if (publicIds.isEmpty()) {
             return;
         }
 
         var extension = EXTENSION.as("e");
         var rows = publicIds.entrySet().stream()
                 .map(e -> DSL.row(e.getKey(), e.getValue()))
-                .collect(Collectors.toList());
+                .toList();
 
         var updates = DSL.values(rows.toArray(Row2[]::new)).as("u", "id", "public_id");
         dsl.update(extension)
@@ -209,19 +201,18 @@ public class ExtensionJooqRepository {
     public List<SitemapRow> fetchSitemapRows() {
         var LAST_UPDATED = DSL.toChar(EXTENSION.LAST_UPDATED_DATE, "YYYY-MM-DD");
         return dsl.select(
-                    NAMESPACE.NAME,
-                    EXTENSION.NAME,
-                    LAST_UPDATED
-                )
+                NAMESPACE.NAME,
+                EXTENSION.NAME,
+                LAST_UPDATED)
                 .from(NAMESPACE)
                 .join(EXTENSION).on(EXTENSION.NAMESPACE_ID.eq(NAMESPACE.ID))
                 .where(EXTENSION.ACTIVE.eq(true))
                 .fetch()
-                .map(row -> new SitemapRow(
-                        row.get(NAMESPACE.NAME),
-                        row.get(EXTENSION.NAME),
-                        row.get(LAST_UPDATED)
-                ));
+                .map(
+                        row -> new SitemapRow(
+                                row.get(NAMESPACE.NAME),
+                                row.get(EXTENSION.NAME),
+                                row.get(LAST_UPDATED)));
     }
 
     public List<String> findActiveExtensionNames(Namespace namespace) {
@@ -233,29 +224,38 @@ public class ExtensionJooqRepository {
                 .fetch(EXTENSION.NAME);
     }
 
+    public List<String> findAllExtensionNames(Namespace namespace) {
+        return dsl.select(EXTENSION.NAME)
+                .from(EXTENSION)
+                .where(EXTENSION.NAMESPACE_ID.eq(namespace.getId()))
+                .orderBy(EXTENSION.NAME.asc())
+                .fetch(EXTENSION.NAME);
+    }
+
     public String findFirstUnresolvedDependency(List<ExtensionId> dependencies) {
-        if(dependencies.isEmpty()) {
+        if (dependencies.isEmpty()) {
             return null;
         }
 
-        var ids = DSL.values(dependencies.stream().map(d -> DSL.row(d.namespace(), d.extension())).toArray(Row2[]::new)).as("ids", "namespace", "extension");
+        var ids = DSL.values(dependencies.stream().map(d -> DSL.row(d.namespace(), d.extension())).toArray(Row2[]::new))
+                .as("ids", "namespace", "extension");
         var namespace = ids.field("namespace", String.class);
         var extension = ids.field("extension", String.class);
         var unresolvedDependency = DSL.concat(namespace, DSL.value("."), extension).as("unresolved_dependency");
         return dsl.select(unresolvedDependency)
                 .from(ids)
                 .leftJoin(NAMESPACE).on(NAMESPACE.NAME.equalIgnoreCase(namespace))
-                .leftJoin(EXTENSION).on(EXTENSION.NAME.equalIgnoreCase(extension))
+                .leftJoin(EXTENSION)
+                .on(EXTENSION.NAME.equalIgnoreCase(extension).and(EXTENSION.NAMESPACE_ID.eq(NAMESPACE.ID)))
                 .where(NAMESPACE.NAME.isNull()).or(EXTENSION.NAME.isNull())
                 .limit(1)
                 .fetchOne(unresolvedDependency);
     }
 
-    public List<Extension> findActiveExtensionsForUrls(Namespace namespace) {
+    public List<Extension> findExtensionsForUrls(Namespace namespace) {
         return dsl.select(EXTENSION.ID, EXTENSION.NAME)
                 .from(EXTENSION)
                 .where(EXTENSION.NAMESPACE_ID.eq(namespace.getId()))
-                .and(EXTENSION.ACTIVE.eq(true))
                 .fetch(row -> {
                     var extension = new Extension();
                     extension.setId(row.get(EXTENSION.ID));
@@ -271,8 +271,7 @@ public class ExtensionJooqRepository {
                         .from(NAMESPACE)
                         .join(EXTENSION).on(EXTENSION.NAMESPACE_ID.eq(NAMESPACE.ID))
                         .where(NAMESPACE.NAME.equalIgnoreCase(namespace))
-                        .and(EXTENSION.NAME.equalIgnoreCase(extension))
-        );
+                        .and(EXTENSION.NAME.equalIgnoreCase(extension)));
     }
 
     /**
@@ -300,8 +299,7 @@ public class ExtensionJooqRepository {
                 NAMESPACE.ID,
                 NAMESPACE.PUBLIC_ID,
                 NAMESPACE.NAME,
-                NAMESPACE.DISPLAY_NAME
-        );
+                NAMESPACE.DISPLAY_NAME);
 
         query.addFrom(EXTENSION);
         query.addJoin(NAMESPACE, NAMESPACE.ID.eq(EXTENSION.NAMESPACE_ID));
@@ -317,7 +315,7 @@ public class ExtensionJooqRepository {
                     .from(NAMESPACE_MEMBERSHIP)
                     .where(NAMESPACE_MEMBERSHIP.NAMESPACE.eq(NAMESPACE.ID))
                     .and(NAMESPACE_MEMBERSHIP.ROLE.eq("owner"));
-            
+
             query.addConditions(DSL.exists(hasOwnerSubquery));
         }
 
@@ -325,88 +323,88 @@ public class ExtensionJooqRepository {
 
         if (extensionName != null && !extensionName.isEmpty()) {
             var lowerExtensionName = extensionName.toLowerCase();
-            
+
             var conditionList = new ArrayList<Condition>();
-            
+
             int inputLen = extensionName.length();
             int minLen = (int) Math.floor(inputLen * (1.0 - levenshteinThreshold));
             int lenMax = (int) Math.ceil(inputLen / (1.0 - levenshteinThreshold));
             conditionList.add(DSL.length(EXTENSION.NAME).between(minLen, lenMax));
-            
+
             var maxLen = DSL.greatest(
                     DSL.val(lowerExtensionName.length()),
-                    DSL.length(EXTENSION.NAME)
-            );
+                    DSL.length(EXTENSION.NAME));
             var maxDistance = maxLen.mul(levenshteinThreshold);
-            
-            var levenshteinDist = DSL.function("levenshtein_less_equal", Integer.class,
+
+            var levenshteinDist = DSL.function(
+                    "levenshtein_less_equal",
+                    Integer.class,
                     DSL.val(lowerExtensionName),
                     DSL.lower(EXTENSION.NAME),
                     DSL.val(1), // insertion cost
                     DSL.val(1), // deletion cost
                     DSL.val(1), // substitution cost
-                    maxDistance.cast(Integer.class)
-            );
-            
+                    maxDistance.cast(Integer.class));
+
             conditionList.add(levenshteinDist.le(maxDistance));
-            
+
             conditions.add(DSL.and(conditionList));
         }
 
         if (namespaceName != null && !namespaceName.isEmpty()) {
             var lowerNamespaceName = namespaceName.toLowerCase();
-            
+
             var conditionList = new ArrayList<Condition>();
-            
+
             int inputLen = namespaceName.length();
             int minLen = (int) Math.floor(inputLen * (1.0 - levenshteinThreshold));
             int lenMax = (int) Math.ceil(inputLen / (1.0 - levenshteinThreshold));
             conditionList.add(DSL.length(NAMESPACE.NAME).between(minLen, lenMax));
-            
+
             var maxLen = DSL.greatest(
                     DSL.val(lowerNamespaceName.length()),
-                    DSL.length(NAMESPACE.NAME)
-            );
+                    DSL.length(NAMESPACE.NAME));
             var maxDistance = maxLen.mul(levenshteinThreshold);
-            
-            var levenshteinDist = DSL.function("levenshtein_less_equal", Integer.class,
+
+            var levenshteinDist = DSL.function(
+                    "levenshtein_less_equal",
+                    Integer.class,
                     DSL.val(lowerNamespaceName),
                     DSL.lower(NAMESPACE.NAME),
                     DSL.val(1), // insertion cost
                     DSL.val(1), // deletion cost
                     DSL.val(1), // substitution cost
-                    maxDistance.cast(Integer.class)
-            );
-            
+                    maxDistance.cast(Integer.class));
+
             conditionList.add(levenshteinDist.le(maxDistance));
-            
+
             conditions.add(DSL.and(conditionList));
         }
 
         if (displayName != null && !displayName.isEmpty()) {
             var evLatest = EXTENSION_VERSION.as("ev_latest");
-            
+
             var lowerDisplayName = displayName.toLowerCase();
-            
+
             int inputLen = displayName.length();
             int minLen = (int) Math.floor(inputLen * (1.0 - levenshteinThreshold));
             int lenMax = (int) Math.ceil(inputLen / (1.0 - levenshteinThreshold));
-            
+
             var maxDisplayNameLen = DSL.greatest(
-                DSL.val(lowerDisplayName.length()),
-                DSL.length(evLatest.DISPLAY_NAME)
-            );
+                    DSL.val(lowerDisplayName.length()),
+                    DSL.length(evLatest.DISPLAY_NAME));
             var maxDisplayNameDistance = maxDisplayNameLen.mul(levenshteinThreshold);
-            
-            var displayNameLevenshtein = DSL.function("levenshtein_less_equal", Integer.class,
+
+            var displayNameLevenshtein = DSL.function(
+                    "levenshtein_less_equal",
+                    Integer.class,
                     DSL.val(lowerDisplayName),
                     DSL.lower(evLatest.DISPLAY_NAME),
                     DSL.val(1), // insertion cost
                     DSL.val(1), // deletion cost
                     DSL.val(1), // substitution cost
-                    maxDisplayNameDistance.cast(Integer.class)
-            );
-            
+                    maxDisplayNameDistance.cast(Integer.class));
+
             var latestQuery = extensionVersionRepo.findLatestQuery(null, false, true);
             latestQuery.addSelect(EXTENSION_VERSION.ID);
             latestQuery.addConditions(EXTENSION_VERSION.EXTENSION_ID.eq(EXTENSION.ID));
@@ -421,7 +419,7 @@ public class ExtensionJooqRepository {
                     .and(evLatest.DISPLAY_NAME.ne(""))
                     .and(DSL.length(evLatest.DISPLAY_NAME).between(minLen, lenMax))
                     .and(displayNameLevenshtein.le(maxDisplayNameDistance));
-            
+
             conditions.add(DSL.exists(displayNameSimilaritySubquery));
         }
 
@@ -434,15 +432,16 @@ public class ExtensionJooqRepository {
         // Order by best match first (lowest Levenshtein distance)
         if (extensionName != null && !extensionName.isEmpty()) {
             var lowerExtensionName = extensionName.toLowerCase();
-            var levenshteinDist = DSL.function("levenshtein", Integer.class,
+            var levenshteinDist = DSL.function(
+                    "levenshtein",
+                    Integer.class,
                     DSL.val(lowerExtensionName),
-                    DSL.lower(EXTENSION.NAME)
-            );
+                    DSL.lower(EXTENSION.NAME));
             query.addOrderBy(levenshteinDist.asc());
         }
 
         query.addLimit(limit);
-        
+
         return query.fetch().map(this::toExtension);
     }
 }

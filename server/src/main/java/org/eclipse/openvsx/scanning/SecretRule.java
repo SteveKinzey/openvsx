@@ -1,22 +1,22 @@
-/********************************************************************************
- * Copyright (c) 2025 Contributors to the Eclipse Foundation 
+/******************************************************************************
+ * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
- * See the NOTICE file(s) distributed with this work for additional 
+ * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
- * This program and the accompanying materials are made available under the 
+ * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
- * SPDX-License-Identifier: EPL-2.0 
- ********************************************************************************/
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
 
-import com.google.re2j.Pattern;
-import jakarta.validation.constraints.NotNull;
-import jakarta.annotation.Nullable;
-
 import java.util.List;
+
+import com.google.re2j.Pattern;
+import org.jspecify.annotations.NonNull;
+import org.jspecify.annotations.Nullable;
 
 /**
  * Single secret rule definition plus builder.
@@ -29,35 +29,35 @@ import java.util.List;
  *   Optional allowlist patterns to exclude known safe matches
  *   Optional capture group specification to extract the actual secret value
  * <p>
- * 
+ *
  * Rules are loaded from YAML files and compiled into efficient Pattern objects.
  */
 public class SecretRule {
     /** Unique identifier for this rule (e.g., "github-pat", "aws-access-key") */
-    private final @NotNull String id;
-    
+    private final @NonNull String id;
+
     /** Human-readable description of what this rule detects */
-    private final @NotNull String description;
-    
-    /** Compiled regex pattern to match secrets (case-insensitive) */
-    private final @NotNull Pattern pattern;
-    
+    private final @NonNull String description;
+
+    /** Compiled regex pattern to match secrets (case-sensitive unless the regex has an inline {@code (?i)}) */
+    private final @NonNull Pattern pattern;
+
     /** Minimum Shannon entropy threshold (0.0-8.0). If set, matches below this are filtered out. */
     private final @Nullable Double entropy;
-    
+
     /** Keywords that must appear in a line before applying the regex (lowercase, for performance) */
-    private final @NotNull List<String> keywords;
-    
+    private final @NonNull List<String> keywords;
+
     /** Compiled allowlist patterns to exclude known safe matches from this rule */
-    private final @NotNull List<Pattern> allowlistPatterns;
-    
+    private final @NonNull List<Pattern> allowlistPatterns;
+
     /** Optional capture group index to extract the secret (default: 1 if available, else 0) */
     private final @Nullable Integer secretGroup;
 
-    private SecretRule(@NotNull Builder builder) {
+    private SecretRule(@NonNull Builder builder) {
         this.id = builder.id;
         this.description = builder.description;
-        this.pattern = Pattern.compile(builder.regex, Pattern.CASE_INSENSITIVE);
+        this.pattern = Pattern.compile(builder.regex);
         this.entropy = builder.entropy;
         this.secretGroup = builder.secretGroup;
 
@@ -81,15 +81,15 @@ public class SecretRule {
         }
     }
 
-    public @NotNull String getId() {
+    public @NonNull String getId() {
         return id;
     }
 
-    public @NotNull String getDescription() {
+    public @NonNull String getDescription() {
         return description;
     }
 
-    public @NotNull Pattern getPattern() {
+    public @NonNull Pattern getPattern() {
         return pattern;
     }
 
@@ -97,11 +97,11 @@ public class SecretRule {
         return entropy;
     }
 
-    public @NotNull List<String> getKeywords() {
+    public @NonNull List<String> getKeywords() {
         return keywords;
     }
 
-    public @NotNull List<Pattern> getAllowlistPatterns() {
+    public @NonNull List<Pattern> getAllowlistPatterns() {
         return allowlistPatterns;
     }
 
@@ -143,7 +143,7 @@ public class SecretRule {
 
         /**
          * Set the regex pattern to match secrets.
-         * Pattern will be compiled as case-insensitive.
+         * Matching is case-sensitive, as in gitleaks; use an inline {@code (?i)} to opt out.
          */
         public Builder regex(String regex) {
             this.regex = regex;

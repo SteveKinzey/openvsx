@@ -1,28 +1,47 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
-
-import com.google.common.collect.Maps;
-import jakarta.persistence.*;
-import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.json.ExtensionJson;
-import org.eclipse.openvsx.json.ExtensionReferenceJson;
-import org.eclipse.openvsx.json.SearchEntryJson;
-import org.eclipse.openvsx.util.TargetPlatform;
-import org.eclipse.openvsx.util.TimeUtil;
 
 import java.io.Serial;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+
+import jakarta.persistence.AttributeOverride;
+import jakarta.persistence.Column;
+import jakarta.persistence.Convert;
+import jakarta.persistence.Embedded;
+import jakarta.persistence.Entity;
+import jakarta.persistence.EnumType;
+import jakarta.persistence.Enumerated;
+import jakarta.persistence.GeneratedValue;
+import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
+import jakarta.persistence.SequenceGenerator;
+import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
+import org.apache.commons.lang3.StringUtils;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
+import org.jspecify.annotations.Nullable;
+
+import org.eclipse.openvsx.json.ExtensionJson;
+import org.eclipse.openvsx.json.ExtensionReferenceJson;
+import org.eclipse.openvsx.json.SearchEntryJson;
+import org.eclipse.openvsx.util.TargetPlatform;
+import org.eclipse.openvsx.util.TimeUtil;
 
 @Entity
 @Table(name = "extension_version")
@@ -31,16 +50,14 @@ public class ExtensionVersion implements Serializable {
     @Serial
     private static final long serialVersionUID = 1L;
 
-    public static final Comparator<ExtensionVersion> SORT_COMPARATOR =
-        Comparator.comparing(ExtensionVersion::getSemanticVersion)
-                .thenComparing(ExtensionVersion::isUniversalTargetPlatform, Comparator.reverseOrder())
-                .thenComparing(ExtensionVersion::getTargetPlatform)
-                .thenComparing(ExtensionVersion::getTimestamp, Comparator.reverseOrder());
+    public static final Comparator<ExtensionVersion> SORT_COMPARATOR = Comparator
+            .comparing(ExtensionVersion::getSemanticVersion)
+            .thenComparing(ExtensionVersion::isUniversalTargetPlatform, Comparator.reverseOrder())
+            .thenComparing(ExtensionVersion::getTargetPlatform)
+            .thenComparing(ExtensionVersion::getTimestamp, Comparator.reverseOrder());
 
     public enum Type {
-        REGULAR,
-        MINIMAL,
-        EXTENDED
+        REGULAR, MINIMAL, EXTENDED
     }
 
     @Id
@@ -72,12 +89,56 @@ public class ExtensionVersion implements Serializable {
 
     private LocalDateTime timestamp;
 
-    @ManyToOne
-    private PersonalAccessToken publishedWith;
+    /**
+     * Who published this version.
+     */
+    @ManyToOne(optional = false)
+    @JoinColumn(name = "published_by_id", nullable = false)
+    private UserData publishedBy;
+
+    @Column(nullable = true)
+    @Enumerated(EnumType.STRING)
+    private PersonalAccessTokenType publishedWithTt;
+
+    /**
+     * The token this version was published with, as best-effort provenance: it answers "what did this
+     * credential publish" after a leak. Nullable and allowed to decay - the token row is deleted when a
+     * one-time token is used or a forgotten user's tokens go - which is why authorship is recorded
+     * separately in {@link #publishedBy} and {@link #publishedWithTt} instead of being read through it.
+     */
+    @Column(name = "published_with_id")
+    @Nullable
+    private Long publishedWithId;
+
+    /**
+     * The OIDC identity that produced this version, for versions published through trusted publishing: the
+     * immutable repository and owner ids and the workflow reference including the ref it ran on, as the
+     * provider asserted them at the exchange. Null for everything published with an ordinary token.
+     * <p>
+     * Copied at publish time rather than reached through the token, which is deleted as it is used.
+     */
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "published_provenance", columnDefinition = "jsonb")
+    @Nullable
+    private Map<String, String> publishedProvenance;
 
     private boolean active;
 
     private boolean potentiallyMalicious;
+
+    /**
+     * Sticky tombstone marker. A removed version has been soft-deleted: it is hidden
+     * (also {@code active == false}) and its files have been stripped from storage, but the row is
+     * kept so its identity stays permanently reserved and can never be republished. Only an admin
+     * purge physically removes the row. Unlike {@code active}, this flag is never cleared by
+     * reactivation or scan processing.
+     */
+    private boolean removed;
+
+    private LocalDateTime removedTimestamp;
+
+    @ManyToOne
+    private UserData removedBy;
 
     private String displayName;
 
@@ -147,9 +208,10 @@ public class ExtensionVersion implements Serializable {
         json.setTargetPlatform(this.getTargetPlatform());
         var namespace = extension.getNamespace();
         json.setNamespace(namespace.getName());
-        json.setNamespaceDisplayName(StringUtils.isNotEmpty(namespace.getDisplayName())
-                ? namespace.getDisplayName()
-                : json.getNamespace());
+        json.setNamespaceDisplayName(
+                StringUtils.isNotEmpty(namespace.getDisplayName())
+                        ? namespace.getDisplayName()
+                        : json.getNamespace());
         json.setName(extension.getName());
         json.setAverageRating(extension.getAverageRating());
         json.setDownloadCount(extension.getDownloadCount());
@@ -174,9 +236,11 @@ public class ExtensionVersion implements Serializable {
         json.setGalleryTheme(this.getGalleryTheme());
         json.setLocalizedLanguages(this.getLocalizedLanguages());
         json.setQna(this.getQna());
-        if (this.getPublishedWith() != null) {
-            json.setPublishedBy(this.getPublishedWith().getUser().toUserJson());
+        if (this.getPublishedBy() != null) {
+            json.setPublishedBy(this.getPublishedBy().toUserJson());
         }
+        json.setPublishedWithTrustedPublishing(
+                getPublishedWithTt() != null && getPublishedWithTt() == PersonalAccessTokenType.TPT);
         if (this.getDependencies() != null) {
             json.setDependencies(toExtensionReferenceJson(this.getDependencies()));
         }
@@ -226,20 +290,20 @@ public class ExtensionVersion implements Serializable {
         var map = Optional.ofNullable(this.getEngines()).orElse(Collections.emptyList()).stream()
                 .map(engine -> engine.split("@"))
                 .filter(split -> split.length == 2)
-                .collect(Collectors.toMap(split -> split[0], split -> split[1], (a, b) -> a, Maps::newLinkedHashMap));
+                .collect(Collectors.toMap(split -> split[0], split -> split[1], (a, b) -> a, LinkedHashMap::new));
 
         return !map.isEmpty() ? map : null;
     }
 
-	public long getId() {
-		return id;
-	}
+    public long getId() {
+        return id;
+    }
 
-	public void setId(long id) {
-		this.id = id;
-	}
+    public void setId(long id) {
+        this.id = id;
+    }
 
-	public Extension getExtension() {
+    public Extension getExtension() {
         return extension;
     }
 
@@ -247,11 +311,11 @@ public class ExtensionVersion implements Serializable {
         this.extension = extension;
     }
 
-	public String getVersion() {
-		return version;
-	}
+    public String getVersion() {
+        return version;
+    }
 
-	public void setVersion(String version) {
+    public void setVersion(String version) {
         this.version = version;
         this.semver = SemanticVersion.parse(version);
     }
@@ -281,36 +345,62 @@ public class ExtensionVersion implements Serializable {
         // do nothing, semver is derived from version
     }
 
-	public boolean isPreRelease() {
-		return preRelease;
-	}
+    public boolean isPreRelease() {
+        return preRelease;
+    }
 
-	public void setPreRelease(boolean preRelease) {
-		this.preRelease = preRelease;
-	}
+    public void setPreRelease(boolean preRelease) {
+        this.preRelease = preRelease;
+    }
 
-	public boolean isPreview() {
-        return preview; 
+    public boolean isPreview() {
+        return preview;
     }
 
     public void setPreview(boolean preview) {
         this.preview = preview;
     }
 
-	public LocalDateTime getTimestamp() {
-		return timestamp;
-	}
-
-	public void setTimestamp(LocalDateTime timestamp) {
-		this.timestamp = timestamp;
-	}
-
-    public PersonalAccessToken getPublishedWith() {
-        return publishedWith;
+    public LocalDateTime getTimestamp() {
+        return timestamp;
     }
 
-    public void setPublishedWith(PersonalAccessToken publishedWith) {
-        this.publishedWith = publishedWith;
+    public void setTimestamp(LocalDateTime timestamp) {
+        this.timestamp = timestamp;
+    }
+
+    public UserData getPublishedBy() {
+        return publishedBy;
+    }
+
+    public void setPublishedBy(UserData publishedBy) {
+        this.publishedBy = publishedBy;
+    }
+
+    public PersonalAccessTokenType getPublishedWithTt() {
+        return publishedWithTt;
+    }
+
+    @Nullable
+    public Map<String, String> getPublishedProvenance() {
+        return publishedProvenance;
+    }
+
+    public void setPublishedProvenance(@Nullable Map<String, String> publishedProvenance) {
+        this.publishedProvenance = publishedProvenance;
+    }
+
+    @Nullable
+    public Long getPublishedWithId() {
+        return publishedWithId;
+    }
+
+    public void setPublishedWithId(@Nullable Long publishedWithId) {
+        this.publishedWithId = publishedWithId;
+    }
+
+    public void setPublishedWithTt(PersonalAccessTokenType publishedWithTt) {
+        this.publishedWithTt = publishedWithTt;
     }
 
     public boolean isActive() {
@@ -329,79 +419,115 @@ public class ExtensionVersion implements Serializable {
         this.potentiallyMalicious = potentiallyMalicious;
     }
 
-	public String getDisplayName() {
-		return displayName;
-	}
+    public boolean isRemoved() {
+        return removed;
+    }
 
-	public void setDisplayName(String displayName) {
-		this.displayName = displayName;
-	}
+    public void setRemoved(boolean removed) {
+        this.removed = removed;
+    }
 
-	public String getDescription() {
-		return description;
-	}
+    /**
+     * Whether the extension this version belongs to should be reported as deleted, i.e. this version is a
+     * soft-delete tombstone <em>and</em> the extension has no active version left.
+     * <p>
+     * Meant for the endpoints that describe an extension through its latest version: as the latest version
+     * is picked across all target platforms including removed ones, a removed version on its own says
+     * nothing about the extension — other versions or target platforms may well still be available.
+     */
+    public boolean isExtensionRemoved() {
+        return removed && extension != null && !extension.isActive();
+    }
 
-	public void setDescription(String description) {
-		this.description = description;
-	}
+    public LocalDateTime getRemovedTimestamp() {
+        return removedTimestamp;
+    }
 
-	public String getLicense() {
-		return license;
-	}
+    public void setRemovedTimestamp(LocalDateTime removedTimestamp) {
+        this.removedTimestamp = removedTimestamp;
+    }
 
-	public void setLicense(String license) {
-		this.license = license;
-	}
+    public UserData getRemovedBy() {
+        return removedBy;
+    }
 
-	public List<String> getEngines() {
-		return engines;
-	}
+    public void setRemovedBy(UserData removedBy) {
+        this.removedBy = removedBy;
+    }
 
-	public void setEngines(List<String> engines) {
-		this.engines = engines;
-	}
+    public String getDisplayName() {
+        return displayName;
+    }
 
-	public List<String> getCategories() {
-		return categories;
-	}
+    public void setDisplayName(String displayName) {
+        this.displayName = displayName;
+    }
 
-	public void setCategories(List<String> categories) {
-		this.categories = categories;
-	}
+    public String getDescription() {
+        return description;
+    }
 
-	public List<String> getExtensionKind() {
-		return extensionKind;
-	}
+    public void setDescription(String description) {
+        this.description = description;
+    }
 
-	public void setExtensionKind(List<String> extensionKind) {
-		this.extensionKind = extensionKind;
-	}
+    public String getLicense() {
+        return license;
+    }
 
-	public List<String> getTags() {
-		return tags;
-	}
+    public void setLicense(String license) {
+        this.license = license;
+    }
 
-	public void setTags(List<String> tags) {
-		this.tags = tags;
-	}
+    public List<String> getEngines() {
+        return engines;
+    }
 
-	public String getHomepage() {
-		return homepage;
-	}
+    public void setEngines(List<String> engines) {
+        this.engines = engines;
+    }
 
-	public void setHomepage(String homepage) {
-		this.homepage = homepage;
-	}
+    public List<String> getCategories() {
+        return categories;
+    }
 
-	public String getRepository() {
-		return repository;
-	}
+    public void setCategories(List<String> categories) {
+        this.categories = categories;
+    }
 
-	public void setRepository(String repository) {
-		this.repository = repository;
-	}
+    public List<String> getExtensionKind() {
+        return extensionKind;
+    }
 
-	public String getSponsorLink() {
+    public void setExtensionKind(List<String> extensionKind) {
+        this.extensionKind = extensionKind;
+    }
+
+    public List<String> getTags() {
+        return tags;
+    }
+
+    public void setTags(List<String> tags) {
+        this.tags = tags;
+    }
+
+    public String getHomepage() {
+        return homepage;
+    }
+
+    public void setHomepage(String homepage) {
+        this.homepage = homepage;
+    }
+
+    public String getRepository() {
+        return repository;
+    }
+
+    public void setRepository(String repository) {
+        this.repository = repository;
+    }
+
+    public String getSponsorLink() {
         return sponsorLink;
     }
 
@@ -409,39 +535,39 @@ public class ExtensionVersion implements Serializable {
         this.sponsorLink = sponsorLink;
     }
 
-	public String getBugs() {
-		return bugs;
-	}
+    public String getBugs() {
+        return bugs;
+    }
 
-	public void setBugs(String bugs) {
-		this.bugs = bugs;
-	}
+    public void setBugs(String bugs) {
+        this.bugs = bugs;
+    }
 
-	public String getMarkdown() {
-		return markdown;
-	}
+    public String getMarkdown() {
+        return markdown;
+    }
 
-	public void setMarkdown(String markdown) {
-		this.markdown = markdown;
-	}
+    public void setMarkdown(String markdown) {
+        this.markdown = markdown;
+    }
 
-	public String getGalleryColor() {
-		return galleryColor;
-	}
+    public String getGalleryColor() {
+        return galleryColor;
+    }
 
-	public void setGalleryColor(String galleryColor) {
-		this.galleryColor = galleryColor;
-	}
+    public void setGalleryColor(String galleryColor) {
+        this.galleryColor = galleryColor;
+    }
 
-	public String getGalleryTheme() {
-		return galleryTheme;
-	}
+    public String getGalleryTheme() {
+        return galleryTheme;
+    }
 
-	public void setGalleryTheme(String galleryTheme) {
-		this.galleryTheme = galleryTheme;
-	}
+    public void setGalleryTheme(String galleryTheme) {
+        this.galleryTheme = galleryTheme;
+    }
 
-	public List<String> getLocalizedLanguages() {
+    public List<String> getLocalizedLanguages() {
         return localizedLanguages;
     }
 
@@ -449,29 +575,29 @@ public class ExtensionVersion implements Serializable {
         this.localizedLanguages = localizedLanguages;
     }
 
-	public String getQna() {
-		return qna;
-	}
+    public String getQna() {
+        return qna;
+    }
 
-	public void setQna(String qna) {
-		this.qna = qna;
-	}
+    public void setQna(String qna) {
+        this.qna = qna;
+    }
 
-	public List<String> getDependencies() {
-		return dependencies;
-	}
+    public List<String> getDependencies() {
+        return dependencies;
+    }
 
-	public void setDependencies(List<String> dependencies) {
-		this.dependencies = dependencies;
-	}
+    public void setDependencies(List<String> dependencies) {
+        this.dependencies = dependencies;
+    }
 
-	public List<String> getBundledExtensions() {
-		return bundledExtensions;
-	}
+    public List<String> getBundledExtensions() {
+        return bundledExtensions;
+    }
 
-	public void setBundledExtensions(List<String> bundledExtensions) {
-		this.bundledExtensions = bundledExtensions;
-	}
+    public void setBundledExtensions(List<String> bundledExtensions) {
+        this.bundledExtensions = bundledExtensions;
+    }
 
     public SignatureKeyPair getSignatureKeyPair() {
         return signatureKeyPair;
@@ -481,7 +607,7 @@ public class ExtensionVersion implements Serializable {
         this.signatureKeyPair = signatureKeyPair;
     }
 
-	public void setType(ExtensionVersion.Type type) {
+    public void setType(ExtensionVersion.Type type) {
         this.type = type;
     }
 
@@ -491,19 +617,28 @@ public class ExtensionVersion implements Serializable {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         ExtensionVersion that = (ExtensionVersion) o;
         return id == that.id
                 && preRelease == that.preRelease
                 && preview == that.preview
                 && active == that.active
                 && potentiallyMalicious == that.potentiallyMalicious
+                && removed == that.removed
+                && Objects.equals(removedTimestamp, that.removedTimestamp)
+                && Objects.equals(getId(removedBy), getId(that.removedBy)) // use id to prevent infinite recursion
                 && Objects.equals(getId(extension), getId(that.extension)) // use id to prevent infinite recursion
                 && Objects.equals(version, that.version)
                 && Objects.equals(targetPlatform, that.targetPlatform)
                 && Objects.equals(timestamp, that.timestamp)
-                && Objects.equals(getId(publishedWith), getId(that.publishedWith)) // use id to prevent infinite recursion                && Objects.equals(displayName, that.displayName)
+                && Objects.equals(getId(publishedBy), getId(that.publishedBy)) // use id to prevent infinite recursion
+                && Objects.equals(publishedWithTt, that.publishedWithTt)
+                && Objects.equals(displayName, that.displayName)
                 && Objects.equals(description, that.description)
                 && Objects.equals(engines, that.engines)
                 && Objects.equals(categories, that.categories)
@@ -528,18 +663,48 @@ public class ExtensionVersion implements Serializable {
     @Override
     public int hashCode() {
         return Objects.hash(
-                id, getId(extension), version, targetPlatform, semver, preRelease, preview, timestamp, getId(publishedWith),
-                active, potentiallyMalicious, displayName, description, engines, categories, tags, extensionKind, license, homepage, repository,
-                sponsorLink, bugs, markdown, galleryColor, galleryTheme, localizedLanguages, qna, dependencies,
-                bundledExtensions, signatureKeyPair, type
-        );
+                id,
+                getId(extension),
+                version,
+                targetPlatform,
+                semver,
+                preRelease,
+                preview,
+                timestamp,
+                getId(publishedBy),
+                publishedWithTt,
+                active,
+                potentiallyMalicious,
+                removed,
+                removedTimestamp,
+                getId(removedBy),
+                displayName,
+                description,
+                engines,
+                categories,
+                tags,
+                extensionKind,
+                license,
+                homepage,
+                repository,
+                sponsorLink,
+                bugs,
+                markdown,
+                galleryColor,
+                galleryTheme,
+                localizedLanguages,
+                qna,
+                dependencies,
+                bundledExtensions,
+                signatureKeyPair,
+                type);
     }
 
     private Long getId(Extension extension) {
         return Optional.ofNullable(extension).map(Extension::getId).orElse(null);
     }
 
-    private Long getId(PersonalAccessToken token) {
-        return Optional.ofNullable(token).map(PersonalAccessToken::getId).orElse(null);
+    private Long getId(UserData user) {
+        return Optional.ofNullable(user).map(UserData::getId).orElse(null);
     }
 }

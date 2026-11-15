@@ -1,43 +1,48 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2023 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.admin;
 
-import org.eclipse.openvsx.migration.HandlerJobRequest;
-import org.eclipse.openvsx.settings.SettingsService;
-import org.eclipse.openvsx.util.TimeUtil;
 import org.jobrunr.jobs.annotations.Job;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
-import java.util.UUID;
+import org.eclipse.openvsx.migration.HandlerJobRequest;
+import org.eclipse.openvsx.settings.ReadOnlySetting;
+import org.eclipse.openvsx.util.TimeUtil;
+import org.eclipse.openvsx.util.UUIDService;
 
 @Component
 public class MonthlyAdminStatisticsJobRequestHandler implements JobRequestHandler<HandlerJobRequest<?>> {
 
-    private final SettingsService settings;
+    private final ReadOnlySetting readOnly;
     private final JobRequestScheduler scheduler;
+    private final UUIDService uuidService;
 
     public MonthlyAdminStatisticsJobRequestHandler(
-            SettingsService settings,
-            JobRequestScheduler scheduler
+            ReadOnlySetting readOnly,
+            JobRequestScheduler scheduler,
+            UUIDService uuidService
     ) {
-        this.settings = settings;
+        this.readOnly = readOnly;
         this.scheduler = scheduler;
+        this.uuidService = uuidService;
     }
 
     @Override
     @Job(name = "Monthly admin statistics update", retries = 0)
     public void run(HandlerJobRequest<?> jobRequest) throws Exception {
-        if (settings.isReadOnly()) {
+        if (readOnly.isEnabled()) {
             return;
         }
 
@@ -46,7 +51,7 @@ public class MonthlyAdminStatisticsJobRequestHandler implements JobRequestHandle
         var month = lastMonth.getMonthValue();
 
         var jobIdText = "AdminStatistics::year=" + year + ",month=" + month;
-        var jobId = UUID.nameUUIDFromBytes(jobIdText.getBytes(StandardCharsets.UTF_8));
+        var jobId = uuidService.generateFromName(jobIdText);
         scheduler.enqueue(jobId, new AdminStatisticsJobRequest(year, month));
     }
 }

@@ -8,61 +8,32 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import { FunctionComponent, ReactNode, useContext, useEffect, useState, useRef } from 'react';
-import { Typography, Box, Container, Grid, Link, Divider } from '@mui/material';
+import { FunctionComponent, ReactNode, useContext, useEffect, useState } from 'react';
+import { Typography, Box, Container, Link, Divider } from '@mui/material';
 import GitHubIcon from '@mui/icons-material/GitHub';
 import LinkedInIcon from '@mui/icons-material/LinkedIn';
 import TwitterIcon from '@mui/icons-material/Twitter';
-import { useParams } from 'react-router-dom';
-import { ExtensionListItem } from '../extension-list/extension-list-item';
+import { useParams } from 'react-router';
+import { ExtensionCard } from '../../components/extension-card';
+import { ExtensionGrid } from '../../components/page-primitives';
 import { MainContext } from '../../context';
 import { DelayedLoadIndicator } from '../../components/delayed-load-indicator';
-import { NamespaceDetails, isError, UrlString } from '../../extension-registry-types';
+import { NamespaceDetails, UrlString } from '../../extension-registry-types';
+import { isNotFound } from '../../server-request';
+import { useNamespaceDetails } from '../../components/namespace/use-namespace-details';
 
 export const NamespaceDetail: FunctionComponent = () => {
-    const [loading, setLoading] = useState(true);
     const [truncateReadMore, setTruncateReadMore] = useState(true);
     const [showReadMore, setShowReadMore] = useState(false);
-    const [namespaceDetails, setNamespaceDetails] = useState<Readonly<NamespaceDetails>>();
-    const [notFoundError, setNotFoundError] = useState('');
 
     const { name } = useParams();
-    const { pageSettings, service, handleError } = useContext(MainContext);
-
-    const abortController = useRef<AbortController>(new AbortController());
-    useEffect(() => {
-        updateNamespaceDetails(name as string);
-        return () => {
-            abortController.current.abort();
-        };
-    }, []);
+    const { pageSettings } = useContext(MainContext);
+    const { data: namespaceDetails, error: detailsError, isLoading } = useNamespaceDetails(name as string);
+    const notFound = isNotFound(detailsError);
 
     useEffect(() => {
-        setNamespaceDetails(undefined);
-        setLoading(true);
-        updateNamespaceDetails(name as string);
+        setTruncateReadMore(true);
     }, [name]);
-
-    const updateNamespaceDetails = async(name: string): Promise<void> => {
-        try {
-            const namespaceDetails = await service.getNamespaceDetails(abortController.current, name);
-            if (isError(namespaceDetails)) {
-                throw namespaceDetails;
-            }
-
-            setNamespaceDetails(namespaceDetails);
-            setLoading(false);
-            setTruncateReadMore(true);
-        } catch (err) {
-            if (err && err.status === 404) {
-                setNotFoundError(`Namespace Not Found: ${name}`);
-            } else {
-                handleError(err);
-            }
-
-            setLoading(false);
-        }
-    };
 
     const readMore = () => {
         setTruncateReadMore(false);
@@ -74,149 +45,160 @@ export const NamespaceDetail: FunctionComponent = () => {
 
     const renderHeaderTags = (name: string, namespaceDetails?: NamespaceDetails): ReactNode => {
         const { namespaceHeadTags: NamespaceHeadTagsComponent } = pageSettings.elements;
-        return <>
-            { NamespaceHeadTagsComponent
-                ? <NamespaceHeadTagsComponent namespaceDetails={namespaceDetails} name={name} pageSettings={pageSettings}/>
-                : null
-            }
-        </>;
+        return (
+            <>
+                {NamespaceHeadTagsComponent ? (
+                    <NamespaceHeadTagsComponent
+                        namespaceDetails={namespaceDetails}
+                        name={name}
+                        pageSettings={pageSettings}
+                    />
+                ) : null}
+            </>
+        );
     };
 
     const renderNotFound = (): ReactNode => {
-        return <>
-            {
-                notFoundError ?
-                <Box p={4}>
-                    <Typography variant='h5'>
-                        {notFoundError}
-                    </Typography>
-                </Box>
-                : null
-            }
-        </>;
+        return (
+            <>
+                {notFound ? (
+                    <Box p={4}>
+                        <Typography variant='h5'>{`Namespace Not Found: ${name}`}</Typography>
+                    </Box>
+                ) : null}
+            </>
+        );
     };
 
     const calculateShowReadMore = (el: HTMLElement) => {
-        const showReadMore = truncateReadMore && el && (el.scrollHeight > el.offsetHeight || el.scrollWidth > el.offsetWidth);
+        const showReadMore =
+            truncateReadMore && el && (el.scrollHeight > el.offsetHeight || el.scrollWidth > el.offsetWidth);
         setShowReadMore(showReadMore);
     };
 
     const renderNamespaceDetails = (namespaceDetails: NamespaceDetails, truncateReadMore: boolean): ReactNode => {
-        return <>
-            <Box sx={{ bgcolor: 'neutral.dark' }}>
-                <Container maxWidth='xl'>
-                    <Box sx={{ display: 'flex', alignItems: 'center', flexDirection: 'column', py: 4, px: 0 }}>
-                        <Grid container>
-                            <Grid item>
-                                <Box
-                                    component='img'
-                                    src={namespaceDetails.logo ?? pageSettings.urls.extensionDefaultIcon}
-                                    sx={{
-                                        height: '7.5rem',
-                                        maxWidth: '9rem',
-                                        mr: { xs: 0, sm: 0, md: '2rem', lg: '2rem', xl: '2rem' },
-                                        pt: 1
-                                    }}
-                                    alt={namespaceDetails.displayName} />
-                            </Grid>
-                            <Grid item xs={7}>
-                                <Grid container spacing={2}>
-                                    <Grid item xs={12}>
-                                        <Typography variant='h5'>{namespaceDetails.displayName}</Typography>
-                                    </Grid>
-                                    <Grid item xs={12} sx={{ pr: '0 !important' }}>
-                                        {
-                                            namespaceDetails.description
-                                            ? <Box>
-                                                <Typography
-                                                    ref={calculateShowReadMore}
-                                                    sx={ truncateReadMore
-                                                        ? {
-                                                            overflow: "hidden",
-                                                            textOverflow: "ellipsis",
-                                                            display: "-webkit-box",
-                                                            WebkitLineClamp: "2",
-                                                            WebkitBoxOrient: "vertical"
-                                                        }
-                                                        : {}
-                                                    }>
-                                                    { namespaceDetails.description }
-                                                </Typography>
-                                                { showReadMore ? <Link color='secondary' underline='hover' component='button' onClick={readMore}>Read more</Link> : null }
-                                            </Box>
-                                            : null
-                                        }
-                                    </Grid>
-                                    <Grid item xs={12}>
-                                        <Grid container spacing={2}>
-                                            {
-                                                namespaceDetails.website
-                                                    ? <Grid item><Link color='secondary' underline='hover' target='_blank' href={namespaceDetails.website}>{displayLink(namespaceDetails.website)}</Link></Grid>
-                                                    : null
-                                            }
-                                            {
-                                                namespaceDetails.website && namespaceDetails.supportLink
-                                                    ? <Grid item><Divider orientation='vertical' sx={{ height: '100%' }} /></Grid>
-                                                    : null
-                                            }
-                                            {
-                                                namespaceDetails.supportLink
-                                                    ? <Grid item><Link color='secondary' underline='hover' target='_blank' href={namespaceDetails.supportLink}>{displayLink(namespaceDetails.supportLink)}</Link></Grid>
-                                                    : null
-                                            }
-                                        </Grid>
-                                    </Grid>
-                                    <Grid item xs={12}>
-                                        <Grid container spacing={2}>
-                                            {
-                                                namespaceDetails.socialLinks.linkedin
-                                                ? <Grid item><Link target='_blank' color='text.primary' href={namespaceDetails.socialLinks.linkedin}><LinkedInIcon/></Link></Grid>
-                                                : null
-                                            }
-                                            {
-                                                namespaceDetails.socialLinks.github
-                                                ? <Grid item><Link target='_blank' color='text.primary' href={namespaceDetails.socialLinks.github}><GitHubIcon/></Link></Grid>
-                                                : null
-                                            }
-                                            {
-                                                namespaceDetails.socialLinks.twitter
-                                                ? <Grid item><Link target='_blank' color='text.primary' href={namespaceDetails.socialLinks.twitter}><TwitterIcon/></Link></Grid>
-                                                : null
-                                            }
-                                        </Grid>
-                                    </Grid>
-                                </Grid>
-                            </Grid>
-                        </Grid>
-                    </Box>
-                </Container>
-            </Box>
-            { namespaceDetails.extensions ?
-                <Container maxWidth='xl'>
-                    <Grid container spacing={2} sx={{ justifyContent: 'center', pt: 6 }}>
-                        {
-                            namespaceDetails.extensions.map((ext, idx) => (
-                                <ExtensionListItem
-                                    idx={idx}
+        const { website, supportLink, socialLinks } = namespaceDetails;
+        return (
+            <>
+                <Box sx={{ borderBottom: '1px solid', borderColor: 'divider' }}>
+                    <Container maxWidth='xl' sx={{ py: { xs: '2rem', sm: '3rem' } }}>
+                        <Box
+                            sx={{
+                                display: 'flex',
+                                flexDirection: { xs: 'column', sm: 'row' },
+                                alignItems: { xs: 'flex-start', sm: 'center' },
+                                gap: { xs: '1.5rem', sm: '2rem' }
+                            }}>
+                            <Box
+                                component='img'
+                                src={namespaceDetails.logo ?? pageSettings.urls.extensionDefaultIcon}
+                                alt={namespaceDetails.displayName}
+                                sx={{ width: '7.5rem', height: '7.5rem', objectFit: 'contain', flexShrink: 0 }}
+                            />
+                            <Box sx={{ minWidth: 0, flex: 1 }}>
+                                <Typography variant='h5' sx={{ fontWeight: 700 }}>
+                                    {namespaceDetails.displayName}
+                                </Typography>
+                                {namespaceDetails.description ? (
+                                    <Box sx={{ mt: '0.5rem' }}>
+                                        <Typography
+                                            color='text.secondary'
+                                            ref={calculateShowReadMore}
+                                            sx={
+                                                truncateReadMore
+                                                    ? {
+                                                          overflow: 'hidden',
+                                                          textOverflow: 'ellipsis',
+                                                          display: '-webkit-box',
+                                                          WebkitLineClamp: '2',
+                                                          WebkitBoxOrient: 'vertical'
+                                                      }
+                                                    : {}
+                                            }>
+                                            {namespaceDetails.description}
+                                        </Typography>
+                                        {showReadMore ? (
+                                            <Link
+                                                color='secondary'
+                                                underline='hover'
+                                                component='button'
+                                                onClick={readMore}>
+                                                Read more
+                                            </Link>
+                                        ) : null}
+                                    </Box>
+                                ) : null}
+                                {website || supportLink ? (
+                                    <Box
+                                        sx={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            flexWrap: 'wrap',
+                                            gap: '0.75rem',
+                                            mt: '1rem'
+                                        }}>
+                                        {website ? (
+                                            <Link color='secondary' underline='hover' target='_blank' href={website}>
+                                                {displayLink(website)}
+                                            </Link>
+                                        ) : null}
+                                        {website && supportLink ? <Divider orientation='vertical' flexItem /> : null}
+                                        {supportLink ? (
+                                            <Link
+                                                color='secondary'
+                                                underline='hover'
+                                                target='_blank'
+                                                href={supportLink}>
+                                                {displayLink(supportLink)}
+                                            </Link>
+                                        ) : null}
+                                    </Box>
+                                ) : null}
+                                {socialLinks.linkedin || socialLinks.github || socialLinks.twitter ? (
+                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: '1rem', mt: '1rem' }}>
+                                        {socialLinks.linkedin ? (
+                                            <Link target='_blank' color='text.primary' href={socialLinks.linkedin}>
+                                                <LinkedInIcon />
+                                            </Link>
+                                        ) : null}
+                                        {socialLinks.github ? (
+                                            <Link target='_blank' color='text.primary' href={socialLinks.github}>
+                                                <GitHubIcon />
+                                            </Link>
+                                        ) : null}
+                                        {socialLinks.twitter ? (
+                                            <Link target='_blank' color='text.primary' href={socialLinks.twitter}>
+                                                <TwitterIcon />
+                                            </Link>
+                                        ) : null}
+                                    </Box>
+                                ) : null}
+                            </Box>
+                        </Box>
+                    </Container>
+                </Box>
+                {namespaceDetails.extensions ? (
+                    <Container maxWidth='xl' sx={{ py: { xs: '2rem', sm: '3rem' } }}>
+                        <ExtensionGrid>
+                            {namespaceDetails.extensions.map((ext, idx) => (
+                                <ExtensionCard
                                     extension={ext}
-                                    filterSize={10}
-                                    key={`${ext.namespace}.${ext.name}`} />
-                            ))
-                        }
-                    </Grid>
-                </Container>
-                : null
-            }
-        </>;
+                                    fadeDelayMs={(idx % 10) * 200}
+                                    key={`${ext.namespace}.${ext.name}`}
+                                />
+                            ))}
+                        </ExtensionGrid>
+                    </Container>
+                ) : null}
+            </>
+        );
     };
 
-    return <>
-        { renderHeaderTags(name as string, namespaceDetails) }
-        <DelayedLoadIndicator loading={loading} />
-        {
-            namespaceDetails
-                ? renderNamespaceDetails(namespaceDetails, truncateReadMore)
-                : renderNotFound()
-        }
-    </>;
+    return (
+        <>
+            {renderHeaderTags(name as string, namespaceDetails)}
+            <DelayedLoadIndicator loading={isLoading} />
+            {namespaceDetails ? renderNamespaceDetails(namespaceDetails, truncateReadMore) : renderNotFound()}
+        </>
+    );
 };

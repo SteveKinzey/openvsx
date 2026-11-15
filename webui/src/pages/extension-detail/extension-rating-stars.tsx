@@ -23,15 +23,20 @@ export const ExtensionRatingStars: FunctionComponent<ExtensionRatingStarsProps> 
         const starsNumber = props.number;
         const fontSize = props.fontSize ?? 'medium';
         if (i <= starsNumber) {
-            return <StarIcon fontSize={fontSize}/>;
+            return <StarIcon key={i} fontSize={fontSize} />;
         }
         if (i > starsNumber && i - 1 < starsNumber) {
-            return <Box component='span' sx={{ position: 'relative', display: 'inline-block' }}>
-                <StarHalfIcon fontSize={fontSize} sx={{ position: 'absolute' }}/>
-                <StarIcon fontSize={fontSize} sx={{ display: 'block', color: '#bcbcbc' }}/>
-            </Box>;
+            // inline-flex + explicit inset pin the half star exactly over the gray
+            // one; an absolute box without offsets sits at its baseline-relative
+            // static position and drifts as line-height changes.
+            return (
+                <Box key={i} component='span' sx={{ position: 'relative', display: 'inline-flex' }}>
+                    <StarHalfIcon fontSize={fontSize} sx={{ position: 'absolute', top: 0, left: 0 }} />
+                    <StarIcon fontSize={fontSize} sx={{ display: 'block', color: '#bcbcbc' }} />
+                </Box>
+            );
         }
-        return <StarIcon key={i} fontSize={fontSize} sx={{ color: '#bcbcbc' }}/>;
+        return <StarIcon key={i} fontSize={fontSize} sx={{ color: '#bcbcbc' }} />;
     };
 
     return <>{[1, 2, 3, 4, 5].map(getStar)}</>;

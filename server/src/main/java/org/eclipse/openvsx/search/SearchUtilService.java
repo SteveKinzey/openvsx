@@ -1,37 +1,44 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2021 Red Hat, Inc. and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
-
+ *****************************************************************************/
 package org.eclipse.openvsx.search;
-
-import org.eclipse.openvsx.entities.Extension;
-import org.springframework.stereotype.Component;
 
 import java.util.Collection;
 import java.util.List;
+
+import org.springframework.stereotype.Service;
+
+import org.eclipse.openvsx.entities.Extension;
+import org.eclipse.openvsx.repositories.RepositoryService;
 
 /**
  * Wrap all available implementations and redirect to the implementation pickup
  * from configuration
  */
-@Component
+@Service
 public class SearchUtilService implements ISearchService {
 
     private final DatabaseSearchService databaseSearchService;
     private final ElasticSearchService elasticSearchService;
+    private final RepositoryService repositories;
 
     public SearchUtilService(
             DatabaseSearchService databaseSearchService,
-            ElasticSearchService elasticSearchService
+            ElasticSearchService elasticSearchService,
+            RepositoryService repositories
     ) {
         this.databaseSearchService = databaseSearchService;
         this.elasticSearchService = elasticSearchService;
+        this.repositories = repositories;
     }
 
     public boolean isEnabled() {
@@ -61,7 +68,24 @@ public class SearchUtilService implements ISearchService {
         return options.requestedSize() > 0 ? getImplementation().search(options) : new SearchResult();
     }
 
-    @Override
+    /**
+     * Reports on the search index for the engine that is actually answering searches.
+     */
+    public SearchIndexStats getIndexStats() {
+        if (elasticSearchService.isEnabled()) {
+            return elasticSearchService.getIndexStats();
+        }
+        // the database engine searches the tables directly, so there is no index to report on
+        var implementation = databaseSearchService.isEnabled() ? SearchIndexStats.DATABASE : SearchIndexStats.NONE;
+        return new SearchIndexStats(
+                isEnabled(),
+                implementation,
+                false,
+                null,
+                repositories.countActiveExtensions(),
+                null);
+    }
+
     public void updateSearchIndex(boolean clear) {
         getImplementation().updateSearchIndex(clear);
     }
@@ -82,11 +106,12 @@ public class SearchUtilService implements ISearchService {
     }
 
     @Override
-    public void removeSearchEntries(Collection<Long> ids) { getImplementation().removeSearchEntries(ids); }
+    public void removeSearchEntries(Collection<Long> ids) {
+        getImplementation().removeSearchEntries(ids);
+    }
 
     @Override
     public void removeSearchEntry(Extension extension) {
         getImplementation().removeSearchEntry(extension);
     }
-
 }

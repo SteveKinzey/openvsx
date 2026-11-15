@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,10 +6,10 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
 
 import org.junit.jupiter.api.Test;
@@ -64,15 +64,16 @@ class EntropyCalculatorTest {
     void calculate_englishWordHasModerateEntropy() {
         // English words have moderate entropy
         double entropy = calculator.calculate("password");
-        assertTrue(entropy > 2.0 && entropy < 4.0, 
-            "English word should have moderate entropy");
+        assertTrue(
+                entropy > 2.0 && entropy < 4.0,
+                "English word should have moderate entropy");
     }
 
     @Test
     void calculate_maxEntropyForUniqueChars() {
         // Maximum entropy when all characters are unique
         double entropy = calculator.calculate("abcd");
-        assertEquals(2.0, entropy, 0.001);  // log2(4) = 2.0
+        assertEquals(2.0, entropy, 0.001); // log2(4) = 2.0
     }
 
     @Test

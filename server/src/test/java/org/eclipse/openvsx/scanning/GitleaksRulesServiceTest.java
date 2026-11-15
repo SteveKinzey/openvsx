@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,20 +6,21 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Files;
 import java.nio.file.Path;
+
+import org.apache.commons.io.FileUtils;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -56,32 +57,31 @@ class GitleaksRulesServiceTest {
 
     @Test
     void failsWhenAutoGenerateEnabledButPathNotConfigured() {
-        SecretDetectorConfig config = buildConfig(true, true, "");  // Empty path
+        SecretDetectorConfig config = buildConfig(true, true, ""); // Empty path
         GitleaksRulesService service = new GitleaksRulesService(config, null, null);
 
         IllegalStateException exception = assertThrows(
-            IllegalStateException.class,
-            service::initialize,
-            "Should throw when path is not configured"
-        );
+                IllegalStateException.class,
+                service::initialize,
+                "Should throw when path is not configured");
 
         // Check the cause since resolveOutputFile exceptions are wrapped
         Throwable cause = exception.getCause();
         assertNotNull(cause, "Should have a cause");
-        assertTrue(cause.getMessage().contains("gitleaks.output-path") || cause.getMessage().contains("not configured"),
-            "Error message should mention the missing configuration property");
+        assertTrue(
+                cause.getMessage().contains("gitleaks.output-path") || cause.getMessage().contains("not configured"),
+                "Error message should mention the missing configuration property");
     }
 
     @Test
     void failsWhenAutoGenerateEnabledButPathIsNull() {
-        SecretDetectorConfig config = buildConfig(true, true, null);  // Null path
+        SecretDetectorConfig config = buildConfig(true, true, null); // Null path
         GitleaksRulesService service = new GitleaksRulesService(config, null, null);
 
         IllegalStateException exception = assertThrows(
-            IllegalStateException.class,
-            service::initialize,
-            "Should throw when path is null"
-        );
+                IllegalStateException.class,
+                service::initialize,
+                "Should throw when path is null");
 
         // Check the cause since resolveOutputFile exceptions are wrapped
         Throwable cause = exception.getCause();
@@ -103,8 +103,9 @@ class GitleaksRulesServiceTest {
         File result = (File) resolveMethod.invoke(service);
 
         assertNotNull(result);
-        assertTrue(Files.exists(result.getParentFile().toPath()), 
-            "Parent directory should be created");
+        assertTrue(
+                Files.exists(result.getParentFile().toPath()),
+                "Parent directory should be created");
         assertEquals(outputFile.toString(), result.getAbsolutePath());
     }
 
@@ -113,10 +114,10 @@ class GitleaksRulesServiceTest {
         // Create a directory structure where the parent doesn't exist yet
         // and make it impossible to create by having a file in the way
         Path subDir = tempDir.resolve("subdir");
-        
+
         // First create the subdir as a file (not a directory)
         Files.writeString(subDir, "content");
-        
+
         // Now try to create a file under it - this should fail
         Path impossiblePath = tempDir.resolve("subdir/content/rules.yaml");
 
@@ -124,16 +125,16 @@ class GitleaksRulesServiceTest {
         GitleaksRulesService service = new GitleaksRulesService(config, null, null);
 
         IllegalStateException exception = assertThrows(
-            IllegalStateException.class,
-            service::initialize
-        );
+                IllegalStateException.class,
+                service::initialize);
 
         // The error will be wrapped, check the cause
         Throwable cause = exception.getCause();
         assertNotNull(cause, "Should have a cause");
-        assertTrue(cause.getMessage().contains("Cannot create directory") ||
-                   cause.getMessage().contains("Cannot write to directory"),
-            "Error message should mention directory issue: " + cause.getMessage());
+        assertTrue(
+                cause.getMessage().contains("Cannot create directory") ||
+                        cause.getMessage().contains("Cannot write to directory"),
+                "Error message should mention directory issue: " + cause.getMessage());
     }
 
     @Test
@@ -151,7 +152,7 @@ class GitleaksRulesServiceTest {
         // File should not be modified
         assertEquals(originalSize, Files.size(outputFile), "File should not be regenerated");
         assertEquals("existing content", Files.readString(outputFile), "Content should be unchanged");
-        
+
         // Path should still be set
         assertEquals(outputFile.toAbsolutePath().toString(), service.getGeneratedRulesPath());
     }
@@ -159,7 +160,7 @@ class GitleaksRulesServiceTest {
     @Test
     void storesGeneratedPathForLaterRetrieval() throws Exception {
         Path outputFile = tempDir.resolve("rules.yaml");
-        Files.writeString(outputFile, "test");  // Pre-create to skip actual generation
+        Files.writeString(outputFile, "test"); // Pre-create to skip actual generation
 
         SecretDetectorConfig config = buildConfig(true, true, outputFile.toString());
         setField(config, "gitleaksForceRefresh", false);
@@ -185,12 +186,13 @@ class GitleaksRulesServiceTest {
         Exception exception = assertThrows(Exception.class, () -> {
             resolveMethod.invoke(service);
         });
-        
+
         // Unwrap the InvocationTargetException
         Throwable cause = exception.getCause();
         assertInstanceOf(IllegalStateException.class, cause, "Cause should be IllegalStateException");
-        assertTrue(cause.getMessage().contains("not configured"),
-            "Error message should explain the configuration is missing");
+        assertTrue(
+                cause.getMessage().contains("not configured"),
+                "Error message should explain the configuration is missing");
     }
 
     @Test
@@ -209,17 +211,23 @@ class GitleaksRulesServiceTest {
 
     @Test
     void acceptsRelativePath() throws Exception {
-        String relativePath = "relative/path/rules.yaml";
+        try {
+            String relativePath = "relative/path/rules.yaml";
 
-        SecretDetectorConfig config = buildConfig(true, true, relativePath);
-        GitleaksRulesService service = new GitleaksRulesService(config, null, null);
+            SecretDetectorConfig config = buildConfig(true, true, relativePath);
+            GitleaksRulesService service = new GitleaksRulesService(config, null, null);
 
-        Method resolveMethod = GitleaksRulesService.class.getDeclaredMethod("resolveOutputFile");
-        resolveMethod.setAccessible(true);
-        File result = (File) resolveMethod.invoke(service);
+            Method resolveMethod = GitleaksRulesService.class.getDeclaredMethod("resolveOutputFile");
+            resolveMethod.setAccessible(true);
+            File result = (File) resolveMethod.invoke(service);
 
-        assertNotNull(result);
-        assertTrue(result.getPath().contains("relative"));
+            assertNotNull(result);
+            assertTrue(result.getPath().contains("relative"));
+        } finally {
+            // FIXME: refactor the test to not create a file in the current working directory
+            //        that we need to cleanup after the test
+            FileUtils.deleteDirectory(new File("relative"));
+        }
     }
 
     // Helper methods
@@ -244,4 +252,3 @@ class GitleaksRulesServiceTest {
         field.set(target, value);
     }
 }
-

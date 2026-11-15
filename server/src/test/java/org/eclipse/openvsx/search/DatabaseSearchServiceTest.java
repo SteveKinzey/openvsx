@@ -1,20 +1,22 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2021 Red Hat, Inc. and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 
 package org.eclipse.openvsx.search;
 
+import java.time.LocalDateTime;
+import java.util.List;
+
 import jakarta.persistence.EntityManager;
-import org.eclipse.openvsx.cache.LatestExtensionVersionCacheKeyGenerator;
-import org.eclipse.openvsx.entities.*;
-import org.eclipse.openvsx.repositories.RepositoryService;
-import org.eclipse.openvsx.util.TargetPlatform;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mockito;
@@ -25,8 +27,10 @@ import org.springframework.data.util.Streamable;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.junit.jupiter.SpringExtension;
 
-import java.time.LocalDateTime;
-import java.util.List;
+import org.eclipse.openvsx.cache.LatestExtensionVersionCacheKeyGenerator;
+import org.eclipse.openvsx.entities.*;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.util.TargetPlatform;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -49,7 +53,7 @@ class DatabaseSearchServiceTest {
         var ext3 = mockExtension("openshift", 4.0, 100, 0, "redhat", List.of("Snippets", "Other"));
         Mockito.when(repositories.findAllActiveExtensions()).thenReturn(Streamable.of(List.of(ext1, ext2, ext3)));
 
-        var searchOptions = searchOptions(null, "Programming Languages",50, 0, null, null);
+        var searchOptions = searchOptions(null, "Programming Languages", 50, 0, null, null);
         var result = search.search(searchOptions);
         // should find two extensions
         assertThat(result.getTotalHits()).isEqualTo(2);
@@ -61,6 +65,8 @@ class DatabaseSearchServiceTest {
         var ext2 = mockExtension("java", 4.0, 100, 10000, "redhat", List.of("Snippets", "Programming Languages"));
         var ext3 = mockExtension("openshift", 1.0, 100, 10, "redhat", List.of("Snippets", "Other"));
         Mockito.when(repositories.findAllActiveExtensions()).thenReturn(Streamable.of(List.of(ext1, ext2, ext3)));
+        Mockito.when(repositories.getMaxExtensionDownloadCount()).thenReturn(10000);
+        Mockito.when(repositories.getAverageReviewRating()).thenReturn(3.96735905);
 
         var searchOptions = searchOptions(null, null, 50, 0, null, SortBy.RELEVANCE);
         var result = search.search(searchOptions);
@@ -79,6 +85,8 @@ class DatabaseSearchServiceTest {
         var ext1 = mockExtension("yaml", 3.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
         var ext2 = mockExtension("java", 4.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
         Mockito.when(repositories.findAllActiveExtensions()).thenReturn(Streamable.of(List.of(ext1, ext2)));
+        Mockito.when(repositories.getMaxExtensionDownloadCount()).thenReturn(0);
+        Mockito.when(repositories.getAverageReviewRating()).thenReturn(3.5);
 
         var searchOptions = searchOptions(null, "Programming Languages", 50, 0, "desc", null);
         var result = search.search(searchOptions);
@@ -99,7 +107,8 @@ class DatabaseSearchServiceTest {
         var ext5 = mockExtension("ext5", 3.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
         var ext6 = mockExtension("ext6", 3.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
         var ext7 = mockExtension("ext7", 3.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
-        Mockito.when(repositories.findAllActiveExtensions()).thenReturn(Streamable.of(List.of(ext1, ext2, ext3, ext4, ext5, ext6, ext7)));
+        Mockito.when(repositories.findAllActiveExtensions())
+                .thenReturn(Streamable.of(List.of(ext1, ext2, ext3, ext4, ext5, ext6, ext7)));
 
         var pageSizeItems = 5;
         var searchOptions = searchOptions(null, null, pageSizeItems, 0, null, null);
@@ -127,7 +136,8 @@ class DatabaseSearchServiceTest {
         var ext5 = mockExtension("ext5", 3.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
         var ext6 = mockExtension("ext6", 3.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
         var ext7 = mockExtension("ext7", 3.0, 100, 0, "redhat", List.of("Snippets", "Programming Languages"));
-        Mockito.when(repositories.findAllActiveExtensions()).thenReturn(Streamable.of(List.of(ext1, ext2, ext3, ext4, ext5, ext6, ext7)));
+        Mockito.when(repositories.findAllActiveExtensions())
+                .thenReturn(Streamable.of(List.of(ext1, ext2, ext3, ext4, ext5, ext6, ext7)));
 
         var pageSizeItems = 2;
         var searchOptions = searchOptions(null, null, pageSizeItems, 4, null, null);
@@ -337,13 +347,13 @@ class DatabaseSearchServiceTest {
             String sortOrder,
             String sortBy
     ) {
-        if(requestedSize == null) {
+        if (requestedSize == null) {
             requestedSize = 18;
         }
-        if(requestedOffset == null) {
+        if (requestedOffset == null) {
             requestedOffset = 0;
         }
-        if(sortBy == null) {
+        if (sortBy == null) {
             sortBy = SortBy.RELEVANCE;
         }
 
@@ -356,8 +366,7 @@ class DatabaseSearchServiceTest {
                 sortOrder,
                 sortBy,
                 false,
-                null
-        );
+                null);
     }
 
     long getIdFromExtensionHits(List<ExtensionSearch> hits, int index) {
@@ -368,8 +377,14 @@ class DatabaseSearchServiceTest {
         return extensionName.hashCode();
     }
 
-    private Extension mockExtension(String name, double averageRating, long ratingCount, int downloadCount,
-            String namespaceName, List<String> categories) {
+    private Extension mockExtension(
+            String name,
+            double averageRating,
+            long ratingCount,
+            int downloadCount,
+            String namespaceName,
+            List<String> categories
+    ) {
         var extension = new Extension();
         extension.setName(name);
         extension.setId(name.hashCode());
@@ -391,8 +406,8 @@ class DatabaseSearchServiceTest {
         var user = new UserData();
         var token = new PersonalAccessToken();
         token.setUser(user);
-        extVer.setPublishedWith(token);
-        Mockito.when(repositories.isVerified(namespace, user)).thenReturn(false);
+        extVer.setPublishedWithTt(token.getType());
+        Mockito.when(repositories.isVerifiedPublisher(extVer)).thenReturn(false);
         Mockito.when(repositories.findLatestVersion(extension, null, false, true)).thenReturn(extVer);
         return extension;
     }

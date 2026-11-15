@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,15 +6,11 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import com.google.re2j.Pattern;
-import org.junit.jupiter.api.AfterEach;
-import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -27,6 +23,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
+
+import com.google.re2j.Pattern;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -99,7 +99,8 @@ class SecretDetectorTest {
                 /*excludedPathKeywords*/ List.of(),
                 /*excludedExtensions*/ List.of());
 
-        String content = String.join("\n",
+        String content = String.join(
+                "\n",
                 "password-ALLOWED123 should be allowlisted",
                 "password-BLOCKME456 secret-scanner:ignore inline suppression");
 
@@ -246,7 +247,8 @@ class SecretDetectorTest {
                 /*excludedPathPatterns*/ List.of(),
                 /*excludedExtensions*/ List.of());
 
-        String content = String.join("\n",
+        String content = String.join(
+                "\n",
                 "tokenaaaaaaaaaaaa low entropy should be ignored",
                 "tokenA1b2C3d4E5f6G7h8J9K0LmNo high entropy should be recorded");
 
@@ -291,22 +293,24 @@ class SecretDetectorTest {
         assertTrue(findings.isEmpty(), "No findings should be recorded for skipped files");
     }
 
-    private SecretDetector buildScanner(Map<String, List<SecretRule>> keywordToRules,
-                                       List<SecretRule> rules,
-                                       List<Pattern> allowlistPatterns,
-                                       List<String> stopwords,
-                                       List<String> inlineSuppressions,
-                                       List<String> excludedPathPatterns,
-                                       List<String> excludedExtensions) {
+    private SecretDetector buildScanner(
+            Map<String, List<SecretRule>> keywordToRules,
+            List<SecretRule> rules,
+            List<Pattern> allowlistPatterns,
+            List<String> stopwords,
+            List<String> inlineSuppressions,
+            List<String> excludedPathPatterns,
+            List<String> excludedExtensions
+    ) {
         AhoCorasick keywordMatcher = AhoCorasick.builder()
-            .addKeywords(keywordToRules.keySet())
-            .build();
+                .addKeywords(keywordToRules.keySet())
+                .build();
 
         AhoCorasick stopwordMatcher = null;
         if (!stopwords.isEmpty()) {
             stopwordMatcher = AhoCorasick.builder()
-                .addKeywords(stopwords)
-                .build();
+                    .addKeywords(stopwords)
+                    .build();
         }
 
         List<Pattern> pathPatterns = null;
@@ -319,16 +323,16 @@ class SecretDetectorTest {
         AhoCorasick excludedExtensionMatcher = null;
         if (!excludedExtensions.isEmpty()) {
             excludedExtensionMatcher = AhoCorasick.builder()
-                .addKeywords(excludedExtensions)
-                .build();
+                    .addKeywords(excludedExtensions)
+                    .build();
         }
 
         // Build Aho-Corasick matcher for inline suppressions
         AhoCorasick inlineSuppressionMatcher = null;
         if (!inlineSuppressions.isEmpty()) {
             inlineSuppressionMatcher = AhoCorasick.builder()
-                .addKeywords(inlineSuppressions)
-                .build();
+                    .addKeywords(inlineSuppressions)
+                    .build();
         }
 
         return new SecretDetector(
@@ -347,8 +351,7 @@ class SecretDetectorTest {
                 /*timeoutCheckEveryNLines*/ 1_000,
                 /*longLineNoSpaceThreshold*/ 500,
                 /*keywordContextChars*/ 50,
-                /*logAllowlistedPreviewLength*/ 6
-        );
+                /*logAllowlistedPreviewLength*/ 6);
     }
 
     private Path createZipWithEntry(String entryName, String content) throws IOException {
@@ -364,10 +367,12 @@ class SecretDetectorTest {
         return zipPath;
     }
 
-    private boolean runScan(SecretDetector scanner,
-                            Path zipPath,
-                            String entryName,
-                            List<SecretDetector.Finding> findings) throws Exception {
+    private boolean runScan(
+            SecretDetector scanner,
+            Path zipPath,
+            String entryName,
+            List<SecretDetector.Finding> findings
+    ) throws Exception {
         try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
             ZipEntry entry = zipFile.getEntry(entryName);
             assertNotNull(entry, "Zip entry should exist");
@@ -386,17 +391,18 @@ class SecretDetectorTest {
                         list.add(finding);
                         count.incrementAndGet();
                         return true;
-                    }
-            );
+                    });
         }
     }
 
-    private boolean runScanWithTimeout(SecretDetector scanner,
-                                       Path zipPath,
-                                       String entryName,
-                                       List<SecretDetector.Finding> findings,
-                                       long startTime,
-                                       long timeoutMillis) throws Exception {
+    private boolean runScanWithTimeout(
+            SecretDetector scanner,
+            Path zipPath,
+            String entryName,
+            List<SecretDetector.Finding> findings,
+            long startTime,
+            long timeoutMillis
+    ) throws Exception {
         try (ZipFile zipFile = new ZipFile(zipPath.toFile())) {
             ZipEntry entry = zipFile.getEntry(entryName);
             assertNotNull(entry, "Zip entry should exist");
@@ -413,8 +419,7 @@ class SecretDetectorTest {
                         list.add(finding);
                         count.incrementAndGet();
                         return true;
-                    }
-            );
+                    });
         }
     }
 
@@ -430,8 +435,8 @@ class SecretDetectorTest {
 
         Map<String, List<SecretRule>> keywordIndex = Map.of("secret", List.of(rule));
         AhoCorasick keywordMatcher = AhoCorasick.builder()
-            .addKeywords(Set.of("secret"))
-            .build();
+                .addKeywords(Set.of("secret"))
+                .build();
 
         SecretDetector scanner = new SecretDetector(
                 keywordMatcher,
@@ -446,11 +451,10 @@ class SecretDetectorTest {
                 new EntropyCalculator(),
                 /*maxFileSizeBytes*/ 1_000_000,
                 /*maxLineLength*/ 10_000,
-                /*timeoutCheckEveryNLines*/ 5,  // Check every 5 lines
+                /*timeoutCheckEveryNLines*/ 5, // Check every 5 lines
                 /*longLineNoSpaceThreshold*/ 500,
                 /*keywordContextChars*/ 50,
-                /*logAllowlistedPreviewLength*/ 6
-        );
+                /*logAllowlistedPreviewLength*/ 6);
 
         // Create file with many lines
         StringBuilder content = new StringBuilder();
@@ -462,16 +466,18 @@ class SecretDetectorTest {
         toDelete.add(zipPath);
 
         List<SecretDetector.Finding> findings = new ArrayList<>();
-        
+
         // Set start time in the past to simulate timeout
         long startTime = System.currentTimeMillis() - 10_000; // 10 seconds ago
         long timeoutMillis = 100; // Very short timeout
 
         // Should throw SecretScanningTimeoutException
-        Exception exception = assertThrows(Exception.class,
+        Exception exception = assertThrows(
+                Exception.class,
                 () -> runScanWithTimeout(scanner, zipPath, "test.txt", findings, startTime, timeoutMillis));
 
-        assertTrue(exception.getMessage().contains("timed out"),
+        assertTrue(
+                exception.getMessage().contains("timed out"),
                 "Exception should mention timeout: " + exception.getMessage());
     }
 
@@ -504,7 +510,7 @@ class SecretDetectorTest {
         toDelete.add(zipPath);
 
         List<SecretDetector.Finding> findings = new ArrayList<>();
-        
+
         // Use a reasonable timeout that won't be exceeded during normal execution
         long startTime = System.currentTimeMillis();
         long timeoutMillis = 5000; // 5 seconds should be plenty
@@ -520,7 +526,7 @@ class SecretDetectorTest {
         // Test that files exceeding the byte limit are rejected by one of two defenses:
         // 1. Early check: entry.getSize() > maxFileSizeBytes
         // 2. Stream limit: SizeLimitInputStream counts actual bytes read
-        
+
         SecretRule rule = new SecretRule.Builder()
                 .id("test-rule")
                 .description("Test rule")
@@ -530,8 +536,8 @@ class SecretDetectorTest {
 
         Map<String, List<SecretRule>> keywordIndex = Map.of("secret", List.of(rule));
         AhoCorasick keywordMatcher = AhoCorasick.builder()
-            .addKeywords(Set.of("secret"))
-            .build();
+                .addKeywords(Set.of("secret"))
+                .build();
 
         long maxFileSizeBytes = 100;
 
@@ -551,16 +557,15 @@ class SecretDetectorTest {
                 100,
                 500,
                 50,
-                6
-        );
+                6);
 
         // Create file with 200 bytes (exceeds 100 byte limit)
         byte[] largeContent = new byte[200];
         java.util.Arrays.fill(largeContent, (byte) 'A');
-        
+
         Path largePath = Files.createTempFile("large-", ".zip");
         toDelete.add(largePath);
-        
+
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(largePath))) {
             ZipEntry entry = new ZipEntry("large.txt");
             zos.putNextEntry(entry);
@@ -572,32 +577,33 @@ class SecretDetectorTest {
         try (ZipFile zipFile = new ZipFile(largePath.toFile())) {
             ZipEntry entry = zipFile.getEntry("large.txt");
             long declaredSize = entry.getSize();
-            
+
             List<SecretDetector.Finding> findings = new ArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
-            
+
             // Early check will reject this
             boolean result = scanner.scanFile(
-                zipFile,
-                entry,
-                findings,
-                System.currentTimeMillis(),
-                5000,
-                counter,
-                (list, count, finding) -> {
+                    zipFile,
+                    entry,
+                    findings,
+                    System.currentTimeMillis(),
+                    5000,
+                    counter,
+                    (list, count, finding) -> {
                         list.add(finding);
                         count.incrementAndGet();
                         return true;
-                }
-            );
-            assertFalse(result, "Early size check should reject file with size " + declaredSize + " > limit " + maxFileSizeBytes);
+                    });
+            assertFalse(
+                    result,
+                    "Early size check should reject file with size " + declaredSize + " > limit " + maxFileSizeBytes);
         }
     }
 
     @Test
     void scanFile_acceptsFileWithinByteLimit() throws Exception {
         // Test that files within the byte limit are scanned successfully
-        
+
         SecretRule rule = new SecretRule.Builder()
                 .id("test-rule")
                 .description("Test rule")
@@ -607,8 +613,8 @@ class SecretDetectorTest {
 
         Map<String, List<SecretRule>> keywordIndex = Map.of("secret", List.of(rule));
         AhoCorasick keywordMatcher = AhoCorasick.builder()
-            .addKeywords(Set.of("secret"))
-            .build();
+                .addKeywords(Set.of("secret"))
+                .build();
 
         long maxFileSizeBytes = 100;
 
@@ -628,16 +634,15 @@ class SecretDetectorTest {
                 100,
                 500,
                 50,
-                6
-        );
+                6);
 
         // Create file with 50 bytes (within 100 byte limit)
         byte[] validContent = new byte[50];
         java.util.Arrays.fill(validContent, (byte) 'B');
-        
+
         Path validPath = Files.createTempFile("valid-", ".zip");
         toDelete.add(validPath);
-        
+
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(validPath))) {
             ZipEntry entry = new ZipEntry("valid.txt");
             zos.putNextEntry(entry);
@@ -650,7 +655,7 @@ class SecretDetectorTest {
             ZipEntry entry = zipFile.getEntry("valid.txt");
             List<SecretDetector.Finding> findings = new ArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
-            
+
             boolean result = scanner.scanFile(
                     zipFile,
                     entry,
@@ -662,9 +667,8 @@ class SecretDetectorTest {
                         list.add(finding);
                         count.incrementAndGet();
                         return true;
-                    }
-            );
-            
+                    });
+
             assertTrue(result, "File within byte limit should be scanned successfully");
         }
     }
@@ -679,7 +683,7 @@ class SecretDetectorTest {
         // This simulates a malicious ZIP where the header lies about the uncompressed size.
         // We use Mockito to make getSize() return a fake small value while the actual
         // content is large, demonstrating the defense-in-depth protection.
-        
+
         SecretRule rule = new SecretRule.Builder()
                 .id("test-rule")
                 .description("Test rule")
@@ -689,8 +693,8 @@ class SecretDetectorTest {
 
         Map<String, List<SecretRule>> keywordIndex = Map.of("secret", List.of(rule));
         AhoCorasick keywordMatcher = AhoCorasick.builder()
-            .addKeywords(Set.of("secret"))
-            .build();
+                .addKeywords(Set.of("secret"))
+                .build();
 
         long maxFileSizeBytes = 100;
 
@@ -710,16 +714,15 @@ class SecretDetectorTest {
                 100,
                 500,
                 50,
-                6
-        );
+                6);
 
         // Create actual content: 500 bytes (way over 100 byte limit)
         byte[] bombContent = new byte[500];
         java.util.Arrays.fill(bombContent, (byte) 'X');
-        
+
         Path bombPath = Files.createTempFile("bomb-", ".zip");
         toDelete.add(bombPath);
-        
+
         try (ZipOutputStream zos = new ZipOutputStream(Files.newOutputStream(bombPath))) {
             ZipEntry entry = new ZipEntry("bomb.txt");
             zos.putNextEntry(entry);
@@ -733,48 +736,47 @@ class SecretDetectorTest {
             ZipFile mockedZipFile = spy(realZipFile);
             ZipEntry realEntry = realZipFile.getEntry("bomb.txt");
             ZipEntry mockedEntry = spy(realEntry);
-            
+
             // ATTACK SIMULATION: Entry header claims 50 bytes (< 100 limit)
             // This bypasses the early size check
             when(mockedEntry.getSize()).thenReturn(50L);
             when(mockedEntry.getCompressedSize()).thenReturn(50L);
             when(mockedZipFile.getEntry("bomb.txt")).thenReturn(mockedEntry);
-            
+
             // But getInputStream() returns the real stream with 500 bytes
             when(mockedZipFile.getInputStream(mockedEntry))
                     .thenReturn(realZipFile.getInputStream(realEntry));
-            
+
             List<SecretDetector.Finding> findings = new ArrayList<>();
             AtomicInteger counter = new AtomicInteger(0);
-            
+
             // The early check sees 50 bytes and passes
             // But SizeLimitInputStream counts the ACTUAL 500 bytes being read
             // and throws IOException when it exceeds the 100 byte limit
-            Exception exception = assertThrows(IOException.class, () -> 
-                scanner.scanFile(
-                        mockedZipFile,
-                        mockedEntry,
-                        findings,
-                        System.currentTimeMillis(),
-                        5000,
-                        counter,
-                        (list, count, finding) -> {
-                            list.add(finding);
-                            count.incrementAndGet();
-                            return true;
-                        }
-                )
-            );
-                
-            assertTrue(exception.getMessage().contains("exceeds limit"),
+            Exception exception = assertThrows(
+                    IOException.class,
+                    () -> scanner.scanFile(
+                            mockedZipFile,
+                            mockedEntry,
+                            findings,
+                            System.currentTimeMillis(),
+                            5000,
+                            counter,
+                            (list, count, finding) -> {
+                                list.add(finding);
+                                count.incrementAndGet();
+                                return true;
+                            }));
+
+            assertTrue(
+                    exception.getMessage().contains("exceeds limit"),
                     "SizeLimitInputStream should catch ZIP bomb during stream reading: " + exception.getMessage());
-            assertTrue(exception.getMessage().contains(String.valueOf(maxFileSizeBytes)),
+            assertTrue(
+                    exception.getMessage().contains(String.valueOf(maxFileSizeBytes)),
                     "Error should mention the " + maxFileSizeBytes + " byte limit: " + exception.getMessage());
-            
+
             // Verify the mock was called, proving the early check saw the fake size
             verify(mockedEntry, atLeastOnce()).getSize();
         }
     }
 }
-
-

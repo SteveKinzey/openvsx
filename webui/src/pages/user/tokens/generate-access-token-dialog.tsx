@@ -1,0 +1,134 @@
+/********************************************************************************
+ * Copyright (c) 2019 TypeFox and others
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License v. 2.0 which is available at
+ * http://www.eclipse.org/legal/epl-2.0.
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ ********************************************************************************/
+
+import { FunctionComponent, useContext, useState } from 'react';
+import { Autocomplete, Box, Button, Checkbox, FormControlLabel, FormHelperText, TextField } from '@mui/material';
+import { GenerateTokenDialog } from '../../../components/generate-token-dialog';
+import { MainContext } from '../../../context';
+import { useUserNamespaces } from '../namespaces/use-user-namespaces';
+import { useNamespaceExtensions } from './use-namespace-extensions';
+import { useCreateAccessToken } from './use-access-tokens';
+
+export const GenerateAccessTokenDialog: FunctionComponent = () => {
+    const { user } = useContext(MainContext);
+    const { data: namespaces = [], isLoading } = useUserNamespaces();
+    const { mutateAsync: createAccessToken } = useCreateAccessToken();
+    const [open, setOpen] = useState(false);
+    const [namespace, setNamespace] = useState('');
+    const [extension, setExtension] = useState('');
+    const [namespaceInput, setNamespaceInput] = useState('');
+    const [extensionInput, setExtensionInput] = useState('');
+    const { data: extensions = [], isLoading: extensionsLoading } = useNamespaceExtensions(namespace);
+    const [publishingOnly, setPublishingOnly] = useState(false);
+    // typed text that is not a picked option would otherwise be silently dropped from the scope
+    const namespaceInvalid = namespaceInput !== namespace;
+    const extensionInvalid = extensionInput !== extension;
+
+    const handleGenerate = async (description: string): Promise<string> => {
+        if (!user) {
+            throw new Error('Not logged in');
+        }
+        const token = await createAccessToken({
+            user,
+            description,
+            scope: { namespace: namespace || undefined, extension: extension || undefined, publishingOnly }
+        });
+        return token.value!;
+    };
+
+    return (
+        <>
+            <Button variant='outlined' onClick={() => setOpen(true)}>
+                Generate new token
+            </Button>
+            <GenerateTokenDialog
+                open={open}
+                onClose={() => {
+                    setOpen(false);
+                    setNamespace('');
+                    setExtension('');
+                    setNamespaceInput('');
+                    setExtensionInput('');
+                    setPublishingOnly(false);
+                }}
+                canGenerate={!namespaceInvalid && !extensionInvalid}
+                onGenerate={handleGenerate}>
+                <Box mt={2} display='flex' flexDirection='column' gap={2}>
+                    <Autocomplete
+                        fullWidth
+                        options={namespaces.map(ns => ns.name)}
+                        loading={isLoading}
+                        clearOnBlur={false}
+                        value={namespace || null}
+                        inputValue={namespaceInput}
+                        onInputChange={(_, value) => setNamespaceInput(value)}
+                        onChange={(_, value) => {
+                            setNamespace(value ?? '');
+                            // the extension belongs to the namespace, so a stale one must not outlive it
+                            setExtension('');
+                            setExtensionInput('');
+                        }}
+                        renderInput={params => (
+                            <TextField
+                                {...params}
+                                label='Namespace (optional)'
+                                error={namespaceInvalid}
+                                helperText={
+                                    namespaceInvalid
+                                        ? 'Select a namespace from the list or clear the field.'
+                                        : 'Restrict the token to this namespace. Leave empty for a token that works everywhere you can publish.'
+                                }
+                            />
+                        )}
+                    />
+                    <Autocomplete
+                        key={namespace}
+                        fullWidth
+                        options={extensions}
+                        loading={extensionsLoading}
+                        disabled={!namespace}
+                        clearOnBlur={false}
+                        value={extension || null}
+                        inputValue={extensionInput}
+                        onInputChange={(_, value) => setExtensionInput(value)}
+                        onChange={(_, value) => setExtension(value ?? '')}
+                        renderInput={params => (
+                            <TextField
+                                {...params}
+                                label='Extension (optional)'
+                                error={extensionInvalid}
+                                helperText={
+                                    extensionInvalid
+                                        ? 'Select an extension from the list or clear the field.'
+                                        : 'Restrict the token to one extension of the namespace.'
+                                }
+                            />
+                        )}
+                    />
+                    <Box>
+                        <FormControlLabel
+                            label='Publishing only'
+                            control={
+                                <Checkbox
+                                    checked={publishingOnly}
+                                    onChange={e => setPublishingOnly(e.target.checked)}
+                                />
+                            }
+                        />
+                        <FormHelperText>
+                            The token can only publish extensions. It cannot create namespaces, delete extensions or use
+                            administration endpoints.
+                        </FormHelperText>
+                    </Box>
+                </Box>
+            </GenerateTokenDialog>
+        </>
+    );
+};

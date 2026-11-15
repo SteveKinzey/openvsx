@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,19 +6,20 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import jakarta.annotation.PostConstruct;
-import jakarta.validation.constraints.NotNull;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.context.annotation.Configuration;
 
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
+
+import jakarta.annotation.PostConstruct;
+import org.jspecify.annotations.NonNull;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Configuration;
 
 /**
  * Configuration for secret detection in extension packages.
@@ -28,7 +29,7 @@ import java.util.List;
  */
 @Configuration
 public class SecretDetectorConfig {
-    
+
     /**
      * Enables or disables secret detection for extension publishing.
      *
@@ -163,7 +164,6 @@ public class SecretDetectorConfig {
     @Value("${ovsx.scanning.secret-detection.suppression-markers:}")
     private String suppressionMarkers;
 
-
     /**
      * Timeout for scanning in seconds. If scanning takes longer, it will be aborted.
      * <p>
@@ -172,7 +172,7 @@ public class SecretDetectorConfig {
      */
     @Value("${ovsx.scanning.secret-detection.timeout-seconds:5}")
     private int timeoutSeconds;
-    
+
     /**
      * Maximum findings to collect before aborting to protect memory and UX.
      * <p>
@@ -247,7 +247,7 @@ public class SecretDetectorConfig {
     /**
      * Suppression markers that skip an entire line from scanning.
      */
-    public @NotNull List<String> getSuppressionMarkers() {
+    public @NonNull List<String> getSuppressionMarkers() {
         if (suppressionMarkers == null || suppressionMarkers.trim().isEmpty()) {
             return List.of();
         }
@@ -261,7 +261,7 @@ public class SecretDetectorConfig {
     public int getTimeoutSeconds() {
         return timeoutSeconds;
     }
-    
+
     public int getMaxFindings() {
         return maxFindings;
     }
@@ -270,7 +270,7 @@ public class SecretDetectorConfig {
      * Get YAML rule paths, supporting comma-separated inputs.
      * Empty input yields an empty list so callers can fail fast.
      */
-    public @NotNull List<String> getRulePaths() {
+    public @NonNull List<String> getRulePaths() {
         if (rulesPath == null || rulesPath.trim().isEmpty()) {
             return List.of();
         }
@@ -320,7 +320,7 @@ public class SecretDetectorConfig {
      * Get gitleaks rule IDs to skip when generating rules.
      * Returns a set for efficient lookup.
      */
-    public @NotNull java.util.Set<String> getGitleaksSkipRuleIds() {
+    public @NonNull Set<String> getGitleaksSkipRuleIds() {
         if (gitleaksSkipRuleIds == null || gitleaksSkipRuleIds.trim().isEmpty()) {
             return java.util.Set.of();
         }
@@ -334,38 +334,38 @@ public class SecretDetectorConfig {
     public void validate() {
         if (minifiedLineThreshold <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.secret-detection.minified-line-threshold must be positive, got: " + minifiedLineThreshold);
+                    "ovsx.secret-detection.minified-line-threshold must be positive, got: " + minifiedLineThreshold);
         }
 
         if (timeoutSeconds <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.secret-detection.timeout-seconds must be positive, got: " + timeoutSeconds);
+                    "ovsx.secret-detection.timeout-seconds must be positive, got: " + timeoutSeconds);
         }
-        
+
         if (maxFindings <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.secret-detection.max-findings must be positive, got: " + maxFindings);
+                    "ovsx.secret-detection.max-findings must be positive, got: " + maxFindings);
         }
 
         if (timeoutCheckInterval <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.secret-detection.timeout-check-interval must be positive, got: " + timeoutCheckInterval);
+                    "ovsx.secret-detection.timeout-check-interval must be positive, got: " + timeoutCheckInterval);
         }
 
         if (longLineNoSpaceThreshold <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.secret-detection.long-line-no-space-threshold must be positive, got: " + longLineNoSpaceThreshold);
+                    "ovsx.secret-detection.long-line-no-space-threshold must be positive, got: "
+                            + longLineNoSpaceThreshold);
         }
 
         if (regexContextChars < 0) {
             throw new IllegalArgumentException(
-                "ovsx.secret-detection.regex-context-chars must be >= 0, got: " + regexContextChars);
+                    "ovsx.secret-detection.regex-context-chars must be >= 0, got: " + regexContextChars);
         }
-        
+
         if (debugPreviewChars < 0) {
             throw new IllegalArgumentException(
-                "ovsx.secret-detection.debug-preview-chars must be >= 0, got: " + debugPreviewChars);
+                    "ovsx.secret-detection.debug-preview-chars must be >= 0, got: " + debugPreviewChars);
         }
     }
 }
-

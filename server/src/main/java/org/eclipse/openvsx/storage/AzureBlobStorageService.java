@@ -1,33 +1,16 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.storage;
-
-import com.azure.core.http.policy.UserAgentPolicy;
-import com.azure.core.util.polling.SyncPoller;
-import com.azure.storage.blob.BlobContainerClient;
-import com.azure.storage.blob.BlobContainerClientBuilder;
-import com.azure.storage.blob.models.BlobCopyInfo;
-import com.azure.storage.blob.models.BlobHttpHeaders;
-import com.azure.storage.blob.models.BlobStorageException;
-import com.azure.storage.blob.models.CopyStatusType;
-import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.cache.FilesCacheKeyGenerator;
-import org.eclipse.openvsx.entities.FileResource;
-import org.eclipse.openvsx.entities.Namespace;
-import org.eclipse.openvsx.util.FileUtil;
-import org.eclipse.openvsx.util.TempFile;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.data.util.Pair;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
 
 import java.io.IOException;
 import java.net.URI;
@@ -36,6 +19,29 @@ import java.time.Duration;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
+
+import com.azure.core.http.policy.UserAgentPolicy;
+import com.azure.core.util.polling.SyncPoller;
+import com.azure.storage.blob.BlobContainerClient;
+import com.azure.storage.blob.BlobContainerClientBuilder;
+import com.azure.storage.blob.models.BlobCopyInfo;
+import com.azure.storage.blob.models.BlobErrorCode;
+import com.azure.storage.blob.models.BlobHttpHeaders;
+import com.azure.storage.blob.models.BlobStorageException;
+import com.azure.storage.blob.models.CopyStatusType;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.data.util.Pair;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Component;
+
+import org.eclipse.openvsx.cache.FilesCacheKeyGenerator;
+import org.eclipse.openvsx.entities.FileResource;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.util.FileUtil;
+import org.eclipse.openvsx.util.HttpHeadersUtil;
+import org.eclipse.openvsx.util.TempFile;
 
 import static org.eclipse.openvsx.cache.CacheService.CACHE_EXTENSION_FILES;
 import static org.eclipse.openvsx.cache.CacheService.GENERATOR_FILES;
@@ -62,11 +68,11 @@ public class AzureBlobStorageService implements IStorageService {
         this.filesCacheKeyGenerator = filesCacheKeyGenerator;
     }
 
-	@Override
-	public boolean isEnabled() {
-		return !StringUtils.isEmpty(serviceEndpoint);
+    @Override
+    public boolean isEnabled() {
+        return !StringUtils.isEmpty(serviceEndpoint);
     }
-    
+
     protected BlobContainerClient getContainerClient() {
         if (containerClient == null) {
             containerClient = new BlobContainerClientBuilder()
@@ -87,7 +93,7 @@ public class AzureBlobStorageService implements IStorageService {
         return action + " " + name + ": missing Azure blob service endpoint";
     }
 
-	@Override
+    @Override
     public void uploadFile(TempFile tempFile) {
         var resource = tempFile.getResource();
         var blobName = getObjectKey(resource);
@@ -106,24 +112,31 @@ public class AzureBlobStorageService implements IStorageService {
             throw new IllegalStateException(missingEndpointMessage("Cannot upload file", blobName));
         }
 
+        var headers = HttpHeadersUtil.createFileResponseHeaders(file.getPath(), fileName);
+
         var blobClient = getContainerClient().getBlobClient(blobName);
-        var headers = new BlobHttpHeaders();
-        headers.setContentType(StorageUtil.getFileType(fileName).toString());
-        if (fileName.endsWith(".vsix") || fileName.endsWith(".sigzip")) {
-            headers.setContentDisposition("attachment; filename=\"" + fileName + "\"");
-        } else {
-            var cacheControl = StorageUtil.getCacheControl(fileName);
-            headers.setCacheControl(cacheControl.getHeaderValue());
+        var blobHeaders = new BlobHttpHeaders();
+
+        if (headers.getContentType() != null) {
+            blobHeaders.setContentType(headers.getContentType().toString());
+        }
+
+        if (StringUtils.isNotBlank(headers.getContentDisposition().toString())) {
+            blobHeaders.setContentDisposition(headers.getContentDisposition().toString());
+        }
+
+        if (headers.getCacheControl() != null) {
+            blobHeaders.setCacheControl(headers.getCacheControl());
         }
 
         blobClient.uploadFromFile(file.getPath().toAbsolutePath().toString(), true);
-        blobClient.setHttpHeaders(headers);
+        blobClient.setHttpHeaders(blobHeaders);
     }
 
-	@Override
-	public void removeFile(FileResource resource) {
-		removeFile(getObjectKey(resource));
-	}
+    @Override
+    public void removeFile(FileResource resource) {
+        removeFile(getObjectKey(resource));
+    }
 
     @Override
     public void removeNamespaceLogo(Namespace namespace) {
@@ -137,8 +150,8 @@ public class AzureBlobStorageService implements IStorageService {
 
         try {
             getContainerClient().getBlobClient(blobName).delete();
-        } catch(BlobStorageException e) {
-            if(e.getStatusCode() != HttpStatus.NOT_FOUND.value()) {
+        } catch (BlobStorageException e) {
+            if (e.getStatusCode() != HttpStatus.NOT_FOUND.value()) {
                 // 404 indicates that the file is already deleted
                 // so only throw an exception for other status codes
                 throw e;
@@ -147,7 +160,7 @@ public class AzureBlobStorageService implements IStorageService {
     }
 
     @Override
-	public URI getLocation(FileResource resource) {
+    public URI getLocation(FileResource resource) {
         var blobName = getObjectKey(resource);
         if (StringUtils.isEmpty(serviceEndpoint)) {
             throw new IllegalStateException(missingEndpointMessage(blobName));
@@ -156,7 +169,7 @@ public class AzureBlobStorageService implements IStorageService {
             throw new IllegalStateException("The Azure blob service endpoint URL must end with a slash.");
         }
         return URI.create(serviceEndpoint + blobContainer + "/" + blobName);
-	}
+    }
 
     @Override
     public URI getNamespaceLogoLocation(Namespace namespace) {
@@ -178,15 +191,35 @@ public class AzureBlobStorageService implements IStorageService {
         }
 
         var tempFile = new TempFile("temp_file_", "");
-        getContainerClient().getBlobClient(blobName).downloadToFile(tempFile.getPath().toAbsolutePath().toString(), true);
+        getContainerClient().getBlobClient(blobName)
+                .downloadToFile(tempFile.getPath().toAbsolutePath().toString(), true);
         tempFile.setResource(resource);
         return tempFile;
     }
 
     @Override
-    public void copyFiles(List<Pair<FileResource,FileResource>> pairs) {
+    public long getFileSize(FileResource resource) throws IOException {
+        var blobName = getObjectKey(resource);
+        if (StringUtils.isEmpty(serviceEndpoint)) {
+            throw new IllegalStateException(missingEndpointMessage(blobName));
+        }
+
+        try {
+            // getProperties is a metadata-only request; it doesn't transfer the blob's content.
+            return getContainerClient().getBlobClient(blobName).getProperties().getBlobSize();
+        } catch (BlobStorageException e) {
+            if (e.getErrorCode() == BlobErrorCode.BLOB_NOT_FOUND) {
+                throw new FileNotFoundInStorageException("Blob not found: " + blobName, e);
+            }
+
+            throw new IOException("Failed to determine file size for " + blobName, e);
+        }
+    }
+
+    @Override
+    public void copyFiles(List<Pair<FileResource, FileResource>> pairs) {
         var copyOperations = new ArrayList<SyncPoller<BlobCopyInfo, Void>>();
-        for(var pair : pairs) {
+        for (var pair : pairs) {
             var oldLocation = getLocation(pair.getFirst()).toString();
             var newBlobName = getObjectKey(pair.getSecond());
             var poller = getContainerClient().getBlobClient(newBlobName)
@@ -194,9 +227,9 @@ public class AzureBlobStorageService implements IStorageService {
 
             copyOperations.add(poller);
         }
-        for(var poller : copyOperations) {
+        for (var poller : copyOperations) {
             var response = poller.waitForCompletion();
-            if(response.getValue().getCopyStatus() != CopyStatusType.SUCCESS) {
+            if (response.getValue().getCopyStatus() != CopyStatusType.SUCCESS) {
                 throw new IllegalStateException(response.getValue().getError());
             }
         }
@@ -210,13 +243,18 @@ public class AzureBlobStorageService implements IStorageService {
                 .beginCopy(oldLocation, Duration.of(1, ChronoUnit.SECONDS));
 
         var response = poller.waitForCompletion();
-        if(response.getValue().getCopyStatus() != CopyStatusType.SUCCESS) {
+        if (response.getValue().getCopyStatus() != CopyStatusType.SUCCESS) {
             throw new IllegalStateException(response.getValue().getError());
         }
     }
 
     @Override
-    @Cacheable(value = CACHE_EXTENSION_FILES, keyGenerator = GENERATOR_FILES, cacheManager = "fileCacheManager", sync = true)
+    @Cacheable(
+        value = CACHE_EXTENSION_FILES,
+        keyGenerator = GENERATOR_FILES,
+        cacheManager = "fileCacheManager",
+        sync = true
+    )
     public Path getCachedFile(FileResource resource) {
         var blobName = getObjectKey(resource);
         if (StringUtils.isEmpty(serviceEndpoint)) {
@@ -224,7 +262,9 @@ public class AzureBlobStorageService implements IStorageService {
         }
 
         var path = filesCacheKeyGenerator.generateCachedExtensionPath(resource);
-        FileUtil.writeSync(path, p -> getContainerClient().getBlobClient(blobName).downloadToFile(p.toAbsolutePath().toString()));
+        FileUtil.writeSync(
+                path,
+                p -> getContainerClient().getBlobClient(blobName).downloadToFile(p.toAbsolutePath().toString()));
         return path;
     }
 }

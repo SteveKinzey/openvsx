@@ -1,19 +1,17 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
 
-import jakarta.persistence.*;
-import org.eclipse.openvsx.search.ExtensionSearch;
-import org.eclipse.openvsx.util.NamingUtil;
-
-import javax.annotation.Nonnull;
 import java.io.Serial;
 import java.io.Serializable;
 import java.time.LocalDateTime;
@@ -21,8 +19,21 @@ import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 
+import jakarta.persistence.*;
+import org.hibernate.annotations.DynamicUpdate;
+import org.jspecify.annotations.NonNull;
+
+import org.eclipse.openvsx.search.ExtensionSearch;
+import org.eclipse.openvsx.util.NamingUtil;
+
+// Many code paths (downloads, reviews, mirror sync, deprecation checks) load and save this entity
+// without ever touching `active`. Without @DynamicUpdate, Hibernate's default full-row UPDATE would
+// rewrite `active` from whatever stale value that transaction happened to load, silently clobbering
+// a concurrent, correct update to it (e.g. a delete that just deactivated the last active version).
 @Entity
+@DynamicUpdate
 @Table(name = "extension")
 public class Extension implements Serializable {
 
@@ -67,7 +78,7 @@ public class Extension implements Serializable {
     /**
      * Convert to a search entity for Elasticsearch.
      */
-    public ExtensionSearch toSearch(@Nonnull ExtensionVersion latest, List<String> targetPlatforms) {
+    public ExtensionSearch toSearch(@NonNull ExtensionVersion latest, List<String> targetPlatforms) {
         var search = new ExtensionSearch();
         search.setId(this.getId());
         search.setName(this.getName());
@@ -85,36 +96,36 @@ public class Extension implements Serializable {
     }
 
     public long getId() {
-		return id;
-	}
-
-	public void setId(long id) {
-		this.id = id;
-	}
-
-	public String getPublicId() {
-		return publicId;
-	}
-
-	public void setPublicId(String publicId) {
-		this.publicId = publicId;
-	}
-
-	public String getName() {
-		return name;
-	}
-
-	public void setName(String name) {
-		this.name = name;
-	}
-
-	public Namespace getNamespace() {
-		return namespace;
+        return id;
     }
 
-	public void setNamespace(Namespace namespace) {
-		this.namespace = namespace;
-	}
+    public void setId(long id) {
+        this.id = id;
+    }
+
+    public String getPublicId() {
+        return publicId;
+    }
+
+    public void setPublicId(String publicId) {
+        this.publicId = publicId;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public Namespace getNamespace() {
+        return namespace;
+    }
+
+    public void setNamespace(Namespace namespace) {
+        this.namespace = namespace;
+    }
 
     public boolean isActive() {
         return active;
@@ -124,12 +135,12 @@ public class Extension implements Serializable {
         this.active = active;
     }
 
-	public Double getAverageRating() {
-		return averageRating;
-	}
+    public Double getAverageRating() {
+        return averageRating;
+    }
 
-	public void setAverageRating(Double averageRating) {
-		this.averageRating = averageRating;
+    public void setAverageRating(Double averageRating) {
+        this.averageRating = averageRating;
     }
 
     public Long getReviewCount() {
@@ -165,7 +176,7 @@ public class Extension implements Serializable {
     }
 
     public List<ExtensionVersion> getVersions() {
-        if(versions == null) {
+        if (versions == null) {
             versions = new ArrayList<>();
         }
 
@@ -196,17 +207,22 @@ public class Extension implements Serializable {
         this.downloadable = downloadable;
     }
 
+    // extension uses id comparison to prevent infinite recursion
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         Extension extension = (Extension) o;
         return id == extension.id
                 && active == extension.active
                 && downloadCount == extension.downloadCount
                 && Objects.equals(publicId, extension.publicId)
                 && Objects.equals(name, extension.name)
-                && Objects.equals(namespace, extension.namespace)
+                && Objects.equals(getId(namespace), getId(extension.namespace))
                 && Objects.equals(versions, extension.versions)
                 && Objects.equals(averageRating, extension.averageRating)
                 && Objects.equals(reviewCount, extension.reviewCount)
@@ -220,8 +236,23 @@ public class Extension implements Serializable {
     @Override
     public int hashCode() {
         return Objects.hash(
-                id, publicId, name, namespace, versions, active, averageRating, reviewCount, downloadCount,
-                publishedDate, lastUpdatedDate, deprecated, replacement, downloadable
-        );
+                id,
+                publicId,
+                name,
+                getId(namespace),
+                versions,
+                active,
+                averageRating,
+                reviewCount,
+                downloadCount,
+                publishedDate,
+                lastUpdatedDate,
+                deprecated,
+                replacement,
+                downloadable);
+    }
+
+    private Long getId(Namespace namespace) {
+        return Optional.ofNullable(namespace).map(Namespace::getId).orElse(null);
     }
 }

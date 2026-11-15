@@ -1,12 +1,15 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.util;
 
 import java.util.List;
@@ -26,22 +29,36 @@ public class TargetPlatform {
     public static final String NAME_DARWIN_ARM64 = "darwin-arm64";
     public static final String NAME_WEB = "web";
 
-    public static final String NAMES_PATH_PARAM_REGEX =
-            NAME_WIN32_X64 + "|" + NAME_WIN32_IA32 + "|" + NAME_WIN32_ARM64 + "|" +
-                    NAME_LINUX_X64 + "|" + NAME_LINUX_ARM64 + "|" + NAME_LINUX_ARMHF + "|" +
-                    NAME_ALPINE_X64 + "|" + NAME_ALPINE_ARM64 + "|" +
-                    NAME_DARWIN_X64 + "|" + NAME_DARWIN_ARM64 + "|" +
-                    NAME_WEB + "|" + NAME_UNIVERSAL;
+    public static final String NAMES_PATH_PARAM_REGEX = NAME_WIN32_X64 + "|" + NAME_WIN32_IA32 + "|" + NAME_WIN32_ARM64
+            + "|" +
+            NAME_LINUX_X64 + "|" + NAME_LINUX_ARM64 + "|" + NAME_LINUX_ARMHF + "|" +
+            NAME_ALPINE_X64 + "|" + NAME_ALPINE_ARM64 + "|" +
+            NAME_DARWIN_X64 + "|" + NAME_DARWIN_ARM64 + "|" +
+            NAME_WEB + "|" + NAME_UNIVERSAL;
+
+    /**
+     * Any known platform name, or nothing at all: unlike a path segment, a query parameter can be absent
+     * or empty, and neither is a request for an unknown platform. For validating the parameter forms of
+     * {@code targetPlatform}, whose {@code allowableValues} the path-segment regex above cannot enforce.
+     */
+    public static final String NAMES_PARAM_REGEX = "(" + NAMES_PATH_PARAM_REGEX + ")?";
 
     public static final List<String> TARGET_PLATFORM_NAMES = List.of(
-        NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-        NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-        NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-        NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-        NAME_WEB, NAME_UNIVERSAL
-    );
+            NAME_WIN32_X64,
+            NAME_WIN32_IA32,
+            NAME_WIN32_ARM64,
+            NAME_LINUX_X64,
+            NAME_LINUX_ARM64,
+            NAME_LINUX_ARMHF,
+            NAME_ALPINE_X64,
+            NAME_ALPINE_ARM64,
+            NAME_DARWIN_X64,
+            NAME_DARWIN_ARM64,
+            NAME_WEB,
+            NAME_UNIVERSAL);
 
-    private TargetPlatform(){}
+    private TargetPlatform() {
+    }
 
     public static boolean isValid(String targetPlatform) {
         return targetPlatform != null && TARGET_PLATFORM_NAMES.contains(targetPlatform);
@@ -49,5 +66,19 @@ public class TargetPlatform {
 
     public static boolean isUniversal(String targetPlatform) {
         return NAME_UNIVERSAL.equals(targetPlatform);
+    }
+
+    /**
+     * The platform named by a version's trailing {@code +<name>} segment, or null if it has none. A
+     * version's own semver build metadata can coincidentally look like one, e.g. {@code 1.2.3+web}.
+     */
+    public static String targetInVersionSuffix(String version) {
+        var separator = version.lastIndexOf('+');
+        if (separator < 0 || separator + 1 >= version.length()) {
+            return null;
+        }
+
+        var candidate = version.substring(separator + 1);
+        return isValid(candidate) ? candidate : null;
     }
 }

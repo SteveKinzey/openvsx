@@ -15,14 +15,16 @@ export interface SuccessResult {
     success: string;
 }
 export function isSuccess(obj: unknown): obj is SuccessResult {
-    return typeof obj === 'object' && typeof (obj as any).success === 'string';
+    const success = (obj as SuccessResult | null | undefined)?.success;
+    return typeof success === 'string';
 }
 
 export interface ErrorResult {
     error: string;
 }
 export function isError(obj: unknown): obj is ErrorResult {
-    return typeof obj === 'object' && typeof (obj as any).error === 'string';
+    const error = (obj as ErrorResult | null | undefined)?.error;
+    return typeof error === 'string' && Boolean(error);
 }
 
 export interface ReportedError {
@@ -44,6 +46,7 @@ export interface SearchEntry {
     namespace: string;
     version: string;
     timestamp?: TimestampString;
+    verified?: boolean;
     allVersions: {
         url: UrlString;
         // key: file type, value: url
@@ -60,6 +63,31 @@ export interface SearchEntry {
     deprecated: boolean;
 }
 
+/**
+ * Registry-wide statistics for one month, as archived by the monthly job or computed on the fly for
+ * the month in progress. Mirrors the server's `AdminStatisticsJson`.
+ *
+ * Every figure except `downloads` is a point-in-time snapshot rather than a total over the month;
+ * `downloads` is the growth in `downloadsTotal` since the previous month.
+ */
+export interface AdminStatistics {
+    year: number;
+    month: number;
+    extensions: number;
+    downloads: number;
+    downloadsTotal: number;
+    publishers: number;
+    averageReviewsPerExtension: number;
+    namespaceOwners: number;
+    extensionsByRating: { rating: number; extensions: number }[];
+    publishersByExtensionsPublished: { extensionsPublished: number; publishers: number }[];
+    topMostActivePublishingUsers: { userLoginName: string; publishedExtensionVersions: number }[];
+    topNamespaceExtensions: { namespace: string; extensions: number }[];
+    topNamespaceExtensionVersions: { namespace: string; extensionVersions: number }[];
+    topMostDownloadedExtensions: { extensionIdentifier: string; downloads: number }[];
+    error?: string;
+}
+
 export const VERSION_ALIASES = ['latest', 'pre-release'];
 
 export interface Extension {
@@ -74,12 +102,18 @@ export interface Extension {
     targetPlatform: string;
     preRelease?: boolean;
     publishedBy: UserData;
+    /** True when this version was published through a trusted publishing workflow. */
+    publishedWithTrustedPublishing?: boolean;
     verified: boolean;
     // key: version, value: url
     allVersions: { [version: string]: UrlString };
     active?: boolean;
+    removed?: boolean;
     reviewStatus?: 'published' | 'under_review' | 'rejected';
     reviewMessage?: string;
+    // True when this version's latest scan found that its namespace already exists in a referenced
+    // external gallery and is not verified - the namespace needs to be verified/claimed to activate it.
+    namespaceOwnershipConflict?: boolean;
 
     averageRating?: number;
     downloadCount: number;
@@ -110,14 +144,17 @@ export interface Extension {
 
     // key: target platform, value: download link
     downloads: { [targetPlatform: string]: UrlString };
+    // key: target platform, value: size in bytes of the package behind its download link. A platform is
+    // absent where the registry does not know the size, and this is the download size, not the installed one.
+    downloadSizes?: { [targetPlatform: string]: number };
     allTargetPlatformVersions?: VersionTargetPlatforms[];
 
-    deprecated: boolean
+    deprecated: boolean;
     replacement?: {
-        url: string
-        displayName: string
-    }
-    downloadable: boolean
+        url: string;
+        displayName: string;
+    };
+    downloadable: boolean;
 }
 
 export interface Badge {
@@ -132,9 +169,21 @@ export interface ExtensionReference {
     version?: string;
 }
 
+export interface TargetPlatformActive {
+    targetPlatform: string;
+    active: boolean;
+    // Whether this target platform version has been removed (soft-deleted). A removed version is a
+    // permanent tombstone: hidden and non-republishable. Only an admin purge frees it.
+    removed: boolean;
+}
+
 export interface VersionTargetPlatforms {
     version: string;
-    targetPlatforms: string[];
+    targetPlatforms: TargetPlatformActive[];
+    // Whether the current user may delete this version. Omitted (undefined) in contexts where deletion
+    // is unrestricted (admin) or not applicable (public); explicitly false for namespace members who
+    // did not publish this version and therefore may only delete their own versions.
+    canDelete?: boolean;
 }
 
 export type StarRating = 1 | 2 | 3 | 4 | 5;
@@ -164,11 +213,60 @@ export interface UserData {
     homepage?: string;
     provider?: string;
     role?: string;
+    /** Admin capabilities individually granted to this user, independent of role (see AdminPermission). */
+    permissions?: AdminPermission[];
     publisherAgreement?: {
-        status: 'none' | 'signed' | 'outdated';
+        status: 'none' | 'signed' | 'outdated' | 'revoked';
         timestamp?: TimestampString;
-    },
+        /** Provider of the additional login needed to sign or revoke the agreement; none if absent. */
+        loginProvider?: string;
+        /** Display name of the login provider; the provider id is shown if absent. */
+        loginProviderName?: string;
+    };
     additionalLogins?: UserData[];
+}
+
+/**
+ * A single admin capability. The server owns the set (deployments may register their own); a user
+ * with role 'admin' implicitly has every one without it appearing in `permissions`.
+ */
+export type AdminPermission = string;
+
+/** The permissions built into Open VSX. */
+export const ADMIN_PERMISSIONS = {
+    manageNamespaces: 'manage_namespaces',
+    manageExtensions: 'manage_extensions',
+    managePublishers: 'manage_publishers',
+    manageScans: 'manage_scans',
+    manageConsistency: 'manage_consistency',
+    manageCaches: 'manage_caches',
+    manageSearchIndex: 'manage_search_index',
+    manageSettings: 'manage_settings',
+    viewReports: 'view_reports'
+} as const satisfies Record<string, AdminPermission>;
+
+/**
+ * The admin access a user should end up with, as a whole rather than a delta: `permissions`
+ * replaces whatever they hold now, and `role: 'none'` removes their role.
+ */
+export interface UserAccess {
+    role: 'admin' | 'privileged' | 'none';
+    permissions: AdminPermission[];
+}
+
+export interface UserRelationships {
+    user: UserData;
+    namespaces: NamespaceDetails[];
+}
+
+export interface UserSearchResult {
+    content: UserRelationships[];
+    page: {
+        size: number;
+        number: number;
+        totalElements: number;
+        totalPages: number;
+    };
 }
 
 export function isEqualUser(u1: UserData, u2: UserData): boolean {
@@ -184,24 +282,31 @@ export interface PersonalAccessToken {
     notified?: boolean;
     description: string;
     deleteTokenUrl: UrlString;
+    publishingOnly?: boolean;
+    scopeNamespace?: string;
+    scopeExtension?: string;
 }
 
-export type ExtensionCategory =
-    'Programming Languages' |
-    'Snippets' |
-    'Linters' |
-    'Themes' |
-    'Debuggers' |
-    'Formatters' |
-    'Keymaps' |
-    'SCM Providers' |
-    'Other' |
-    'Extension Packs' |
-    'Language Packs' |
-    'Data Science' |
-    'Machine Learning' |
-    'Visualization' |
-    'Notebooks';
+export const CATEGORIES = [
+    'AI',
+    'Programming Languages',
+    'Snippets',
+    'Linters',
+    'Themes',
+    'Debuggers',
+    'Formatters',
+    'Keymaps',
+    'SCM Providers',
+    'Other',
+    'Extension Packs',
+    'Language Packs',
+    'Data Science',
+    'Machine Learning',
+    'Visualization',
+    'Notebooks'
+] as const;
+
+export type ExtensionCategory = (typeof CATEGORIES)[number];
 
 export interface CsrfTokenJson {
     value: string;
@@ -225,6 +330,8 @@ export interface Namespace {
     membersUrl: UrlString;
     roleUrl: UrlString;
     detailsUrl: UrlString;
+    // present only when the current user may manage trusted publishers for this namespace
+    trustedPublishingUrl?: UrlString;
 }
 
 export interface NamespaceDetails {
@@ -237,6 +344,55 @@ export interface NamespaceDetails {
     supportLink?: UrlString;
     socialLinks: { [key: string]: UrlString | undefined };
     extensions?: SearchEntry[];
+}
+
+export interface TrustedPublisherInput {
+    key: string;
+    // form label / help text for the field
+    description: string;
+    optional: boolean;
+}
+
+export interface TrustedPublisherProvider {
+    id: string;
+    name: string;
+    url: UrlString;
+    registrationInputs: TrustedPublisherInput[];
+}
+
+export interface TrustedPublisherStatus {
+    enabled: boolean;
+    allowed: boolean;
+    // present only when the feature is enabled and the current user is allowed to use it
+    trustedPublisherProviders?: TrustedPublisherProvider[];
+}
+
+export interface TrustedPublisherRequest {
+    provider: string;
+    namespace: string;
+    extension: string;
+    registration: { [key: string]: string };
+}
+
+export interface TrustedPublisher {
+    id: number;
+    provider: string;
+    namespace: string;
+    extension: string;
+    registration: { [key: string]: string };
+    createdTimestamp?: TimestampString;
+    // set while the registration of a private repository waits for the first publish that completes it
+    pending?: boolean;
+    // returned once, in the response to the registration that created the pending registration
+    registrationCode?: string;
+    registrationCodeExpiry?: TimestampString;
+}
+
+export interface TrustedPublisherList {
+    trustedPublishers: TrustedPublisher[];
+    // extensions a trusted publisher can still be registered for: active, and not registered yet
+    // (the server allows at most one registration per extension)
+    registrableExtensions: string[];
 }
 
 export interface PublisherInfo {
@@ -252,11 +408,25 @@ export interface TargetPlatformVersion {
 }
 
 export interface RegistryVersion {
-    version: string
+    version: string;
+    /** Default limit in bytes, applied when neither a namespace nor an extension override applies. */
+    maxExtensionSize?: number;
+    /** Largest package the registry accepts from any namespace: the default raised by the highest override. */
+    maxExtensionSizeCeiling?: number;
+}
+
+/** One bucket of the download time series: `t` is the UTC bucket start (yyyy-MM-dd). */
+export interface DownloadSeriesPoint {
+    t: string;
+    count: number;
+}
+
+export interface DownloadSeries {
+    points: DownloadSeriesPoint[];
 }
 
 export interface LoginProviders {
-    loginProviders: Record<string, string>
+    loginProviders: Record<string, string>;
 }
 
 export type MembershipRole = 'contributor' | 'owner';
@@ -418,71 +588,19 @@ export interface FileDecisionDeleteResponse {
     results: FileDecisionDeleteResult[];
 }
 
-export enum TierType {
-    FREE = 'FREE',
-    SAFETY = 'SAFETY',
-    NON_FREE = 'NON_FREE'
-}
-
-export enum RefillStrategy {
-    GREEDY = 'GREEDY',
-    INTERVAL = 'INTERVAL'
-}
-
-export interface Tier {
-    name: string;
-    description?: string;
-    tierType: TierType;
-    capacity: number;
-    duration: number;
-    refillStrategy: RefillStrategy;
-}
-
-export interface TierList {
-    tiers: Tier[];
-}
-
-export enum EnforcementState {
-    EVALUATION = 'EVALUATION',
-    ENFORCEMENT = 'ENFORCEMENT'
-}
-
-export interface Customer {
-    name: string;
-    tier?: Tier;
-    state: EnforcementState;
-    cidrBlocks: string[];
-}
-
-export interface CustomerList {
-    customers: Customer[];
-}
-
-export interface CustomerMembership {
-    customer: string;
-    user: UserData;
-}
-
-export interface CustomerMembershipList {
-    customerMemberships: CustomerMembership[];
-}
-
-export interface RateLimitToken {
+export interface SizeOverride {
     id: number;
-    value?: string;
-    description?: string;
-    createdTimestamp: TimestampString;
+    namespace: string;
+    /** Absent means the override applies to the whole namespace. */
+    extension?: string;
+    /** Maximum package size in bytes. */
+    maxSize: number;
 }
 
-export interface UsageStats {
-    windowStart: number; // epoch seconds in UTC
-    duration: number; // in seconds
-    count: number;
-}
-
-export interface UsageStatsList {
-    stats: UsageStats[];
-    dailyP95?: number;
+export interface SizeOverrideList {
+    sizeOverrides: SizeOverride[];
+    /** Read-only: neither a size override nor the registry-wide default can be raised past this ceiling. */
+    maxOverrideSize: number;
 }
 
 export interface Log {
@@ -501,6 +619,167 @@ export interface LogPageableList {
     };
 }
 
-export interface Settings {
+export type BannerSeverity = 'info' | 'warning';
+
+/**
+ * The settings the registry serves to every visitor. While the banner is switched on all four
+ * properties are present; while it is off, none are.
+ */
+export interface SiteSettings {
+    bannerEnabled?: boolean;
+    bannerMessage?: string;
+    bannerSeverity?: BannerSeverity;
+    bannerDismissId?: string;
+    /** Whether the weekly downloads card is shown: configured on the server and switched on by an admin. */
+    downloadAnalyticsVisible?: boolean;
+}
+
+/** Runtime settings as an admin reads them. A save sends a `Partial` of this, only what changed. */
+export interface Settings extends SiteSettings {
     readOnly: boolean;
+    /** Default max extension package size in bytes, applied when no namespace/extension override exists. */
+    maxExtensionSize: number;
+    /** Read-only: neither maxExtensionSize nor a size override can be raised past this ceiling. */
+    maxOverrideSize: number;
+    /**
+     * Shows the weekly downloads card on extension pages. Off until an admin switches it on, and
+     * absent where the server has no download analytics configured, since it cannot be switched on then.
+     */
+    downloadAnalyticsVisible?: boolean;
+}
+
+export interface SearchIndex {
+    enabled: boolean;
+    implementation: 'elasticsearch' | 'database' | 'none';
+    indexExists: boolean;
+    /** Absent when there is no index to count - the database engine searches the tables directly. */
+    indexedDocuments?: number;
+    activeExtensions: number;
+    maxResultWindow?: number;
+}
+
+/**
+ * One cache registered in the application. A measurement is absent rather than zero when the
+ * implementation behind the cache cannot report it, so "not measured" stays distinguishable from
+ * "nothing cached".
+ */
+export interface CacheInfo {
+    /**
+     * Bean name of the cache manager this cache belongs to. Cache names are unique only within a
+     * manager, so the manager and the name together are what identify a cache.
+     */
+    manager: string;
+    name: string;
+    implementation: 'caffeine' | 'jcache' | 'redis' | string;
+    /** Absent for implementations that cannot be counted without scanning, such as Redis. */
+    entries?: number;
+    /** Absent when the cache was not configured to record statistics. */
+    hits?: number;
+    misses?: number;
+    /** Hits over lookups, 0 to 1. Absent when nothing has been looked up yet. */
+    hitRate?: number;
+    evictions?: number;
+}
+
+export interface CacheList {
+    /**
+     * Whether the caches count hits and misses at all. When false every statistic is absent because
+     * nothing is counting, not because nothing is happening.
+     */
+    statisticsEnabled: boolean;
+    caches: CacheInfo[];
+}
+
+/** The state of download analytics, for the admin dashboard. */
+export interface AnalyticsStatus {
+    /** Whether analytics is turned on; when false only the file counts are present. */
+    enabled: boolean;
+    /** Whether the time-series database is reachable right now. */
+    available?: boolean;
+    /** ISO 8601 UTC time since which the database has been reachable, or unreachable. */
+    since?: string;
+    /** ISO 8601 UTC time of the last probe of the database. */
+    lastProbe?: string;
+    /** Why the last probe failed; absent once a probe succeeded. */
+    lastError?: string;
+    /** Ingested log files kept until their events can be stored. */
+    pendingFiles: number;
+    /** Log files that failed ingestion and await manual attention. */
+    failedFiles: number;
+}
+
+/** Why a search returned what it returned, in the order it returned it. */
+export interface SearchExplain {
+    query: string;
+    totalHits: number;
+    references: SearchExplainReferences;
+    entries: SearchExplainEntry[];
+}
+
+/**
+ * The registry-wide values the relevance terms are measured against. They belong to the registry rather
+ * than to any extension, and are the usual reason a term contributes nothing: a downloads term divided by
+ * a maximum in the tens of millions is near zero for almost everything.
+ */
+export interface SearchExplainReferences {
+    maxDownloadCount: number;
+    oldestTimestamp?: string;
+    averageReviewRating: number;
+}
+
+/** One step of the engine's account of a score: what it was worth, and the steps that produced it. */
+export interface SearchScoreDetail {
+    description: string;
+    value: number;
+    details: SearchScoreDetail[];
+    /** Children were dropped to keep the response readable; this is not a leaf. */
+    truncated: boolean;
+}
+
+export interface SearchExplainEntry {
+    position: number;
+    namespace: string;
+    name: string;
+    downloadCount: number;
+    averageRating?: number;
+    timestamp?: string;
+    /** What the search ranked on: the text score multiplied by the stored relevance. */
+    score: number;
+    /** How well the query matched this document's text, recovered from the product. */
+    textScore?: number;
+    /** The relevance held on the indexed document, which is what actually ranked it. */
+    storedRelevance: number;
+    /** Recomputed now; differing from `storedRelevance` means the index has not been rebuilt since. */
+    currentRelevance?: number;
+    rating?: number;
+    downloads?: number;
+    recency?: number;
+    unverified: boolean;
+    /** What the unverified factor is; configurable, so how much it costs is not a constant to assume. */
+    unverifiedFactor?: number;
+    deprecated: boolean;
+    deprecatedFactor?: number;
+    /** The engine's own account of the score, which is the only view of what the text half is made of. */
+    scoreDetail?: SearchScoreDetail;
+}
+
+export interface ConsistencyCheck {
+    id: string;
+    name: string;
+    description: string;
+    currentFindingsCount: number;
+}
+
+export interface ConsistencyCheckList {
+    checks: ConsistencyCheck[];
+}
+
+export interface ConsistencyFinding {
+    entityId: number;
+    label: string;
+    detail: string;
+}
+
+export interface ConsistencyFindingList {
+    findings: ConsistencyFinding[];
 }
