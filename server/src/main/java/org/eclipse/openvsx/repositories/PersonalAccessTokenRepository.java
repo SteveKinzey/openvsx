@@ -1,38 +1,49 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.repositories;
 
-import org.eclipse.openvsx.entities.PersonalAccessToken;
-import org.eclipse.openvsx.entities.UserData;
+import java.time.LocalDateTime;
+import java.util.Collection;
+import java.util.List;
+
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.Repository;
 import org.springframework.data.util.Streamable;
 
-import java.time.LocalDateTime;
-import java.util.List;
+import org.eclipse.openvsx.entities.PersonalAccessToken;
+import org.eclipse.openvsx.entities.PersonalAccessTokenType;
+import org.eclipse.openvsx.entities.UserData;
 
 public interface PersonalAccessTokenRepository extends Repository<PersonalAccessToken, Long> {
 
-    Streamable<PersonalAccessToken> findAll();
-
     Streamable<PersonalAccessToken> findByUser(UserData user);
 
-    Streamable<PersonalAccessToken> findByUserAndActiveTrue(UserData user);
+    Streamable<PersonalAccessToken> findByUserAndActiveTrueAndTypeIn(
+            UserData user,
+            Collection<PersonalAccessTokenType> types
+    );
 
-    long countByUserAndActiveTrue(UserData user);
+    Streamable<PersonalAccessToken> findByVersion(int version);
+
+    long countByUserAndActiveTrueAndTypeIn(UserData user, Collection<PersonalAccessTokenType> types);
 
     PersonalAccessToken findById(long id);
 
     PersonalAccessToken findByValue(String value);
+
+    PersonalAccessToken findByValueAndVersion(String value, int version);
 
     PersonalAccessToken findByUserAndDescriptionAndActiveTrue(UserData user, String description);
 
@@ -41,12 +52,32 @@ public interface PersonalAccessTokenRepository extends Repository<PersonalAccess
     int updateActiveSetFalse(UserData user);
 
     @Modifying
-    @Query("update PersonalAccessToken t set t.expiresTimestamp = ?1 where t.active = true and t.expiresTimestamp is null")
-    int updateExpiresTimeForLegacyAccessTokens(LocalDateTime timestamp);
+    @Query(
+        "update PersonalAccessToken t set t.expiresTimestamp = ?1 where t.active = true and t.expiresTimestamp is null and t.type in ?2"
+    )
+    int updateExpiresTimeForLegacyAccessTokens(LocalDateTime timestamp, Collection<PersonalAccessTokenType> types);
 
-    List<PersonalAccessToken> findByExpiresTimestampLessThanEqualAndActiveTrueAndNotifiedFalseOrderById(LocalDateTime timestamp, Pageable pageable);
+    List<PersonalAccessToken> findByExpiresTimestampLessThanEqualAndActiveTrueAndNotifiedFalseOrderById(
+            LocalDateTime timestamp,
+            Pageable pageable
+    );
 
     @Modifying
-    @Query(value = "update personal_access_token set active = false where expires_timestamp <= ?1 and active = true returning *", nativeQuery = true)
+    @Query(
+        value = "update personal_access_token set active = false where expires_timestamp <= ?1 and active = true returning *",
+        nativeQuery = true
+    )
     List<PersonalAccessToken> expireAccessTokens(LocalDateTime timestamp);
+
+    /**
+     * Deletes the expired tokens of the given types outright. An expired machine-issued token can never
+     * be used again, and nothing reads the row afterwards - the same reason using a one-time token deletes
+     * it.
+     */
+    @Modifying
+    @Query(
+        value = "delete from personal_access_token where expires_timestamp <= ?1 and type in ?2 returning *",
+        nativeQuery = true
+    )
+    List<PersonalAccessToken> deleteExpiredAccessTokens(LocalDateTime timestamp, Collection<String> types);
 }

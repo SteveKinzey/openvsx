@@ -1,41 +1,45 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020-2021 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
-
+ *****************************************************************************/
 package org.eclipse.openvsx.search;
-
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.annotation.Nullable;
-import org.eclipse.openvsx.entities.Extension;
-import org.eclipse.openvsx.entities.ExtensionVersion;
-import org.eclipse.openvsx.repositories.RepositoryService;
-import org.eclipse.openvsx.util.NamingUtil;
-import org.eclipse.openvsx.util.TimeUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.Optional;
 
+import org.jspecify.annotations.Nullable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Service;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
+
+import org.eclipse.openvsx.entities.Extension;
+import org.eclipse.openvsx.entities.ExtensionVersion;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.util.NamingUtil;
+import org.eclipse.openvsx.util.TimeUtil;
+
 /**
  * Provides relevance for a given extension
  */
-@Component
+@Service
 public class RelevanceService {
 
     protected final Logger logger = LoggerFactory.getLogger(RelevanceService.class);
 
     private final RepositoryService repositories;
+    private final JsonMapper jsonMapper;
 
     @Value("${ovsx.search.relevance.rating:1.0}")
     double ratingRelevance;
@@ -50,6 +54,7 @@ public class RelevanceService {
 
     public RelevanceService(RepositoryService repositories) {
         this.repositories = repositories;
+        this.jsonMapper = JsonMapper.shared();
     }
 
     public @Nullable ExtensionSearch toSearchEntry(Extension extension, SearchStats stats) {
@@ -61,7 +66,7 @@ public class RelevanceService {
         var targetPlatforms = repositories.findExtensionTargetPlatforms(extension);
         var entry = extension.toSearch(latest, targetPlatforms);
         entry.setRating(calculateRating(extension, stats));
-        entry.setRelevance(calculateRelevance(extension, latest, stats, entry));
+        entry.setRelevance(calculateRelevance(extension, latest, stats));
 
         return entry;
     }
@@ -75,44 +80,100 @@ public class RelevanceService {
         return (averageRating * reviews + stats.averageReviewRating * padding) / (reviews + padding);
     }
 
-    private double calculateRelevance(Extension extension, ExtensionVersion latest, SearchStats stats, ExtensionSearch entry) {
+    /**
+     * What a relevance score is made of, term by term.
+     * <p>
+     * Returned by {@link #explainRelevance} so that the admin dashboard can show why a result sits where
+     * it does. It is the same object {@link #calculateRelevance} reduces to a single number, rather than a
+     * reconstruction of it: a debugging view that computes the score its own way is a view of something
+     * other than what the index holds, and the first thing it would hide is the two of them disagreeing.
+     *
+     * @param rating           the rating term, already weighted and clamped
+     * @param downloads        the downloads term, already weighted and clamped
+     * @param timestamp        the recency term, already weighted and clamped
+     * @param unverified       whether the unverified-publisher factor was applied
+     * @param unverifiedFactor what that factor is, which is configurable and so not to be assumed
+     * @param deprecated       whether the deprecated factor was applied
+     * @param deprecatedFactor what that factor is, likewise
+     * @param total            the relevance actually stored on the indexed document
+     */
+    public record RelevanceBreakdown(
+            double rating,
+            double downloads,
+            double timestamp,
+            boolean unverified,
+            double unverifiedFactor,
+            boolean deprecated,
+            double deprecatedFactor,
+            double total
+    ) {}
+
+    /**
+     * The relevance of an extension, broken into the terms it is the sum of.
+     * <p>
+     * Recomputed against the statistics of the moment rather than read off the document, so that a
+     * {@code total} differing from the stored value tells you the index is stale - which is a thing worth
+     * being able to see.
+     */
+    public @Nullable RelevanceBreakdown explainRelevance(Extension extension, SearchStats stats) {
+        var latest = repositories.findLatestVersion(extension, null, false, true);
+        if (latest == null) {
+            return null;
+        }
+
+        return breakdown(extension, latest, stats);
+    }
+
+    private double calculateRelevance(Extension extension, ExtensionVersion latest, SearchStats stats) {
+        return breakdown(extension, latest, stats).total();
+    }
+
+    private RelevanceBreakdown breakdown(Extension extension, ExtensionVersion latest, SearchStats stats) {
         var extensionId = NamingUtil.toExtensionId(extension);
         logger.debug(">> [{}] CALCULATE RELEVANCE", extensionId);
-        var ratingValue = 0.0;
-        if (extension.getAverageRating() != null) {
-            logger.debug("[{}] INCLUDE AVG RATING", extensionId);
-            var reviewCount = extension.getReviewCount();
-            // Reduce the rating relevance if there are only few reviews
-            var countRelevance = saturate(reviewCount, 0.25);
-            ratingValue = (extension.getAverageRating() / 5.0) * countRelevance;
-            logger.debug("[{}] {} = {} * {} | {}", extensionId, ratingValue, extension.getAverageRating() / 5.0, countRelevance, reviewCount);
-        }
-        var downloadsValue = entry.getDownloadCount() / stats.downloadRef;
+        var ratingValue = calculateRating(extension, stats) / 5.0;
+        // Log scale: download counts span several orders of magnitude, so measuring one against the
+        // largest in the registry leaves everything outside the top few percent indistinguishable
+        // from nothing. See EclipseFdn/open-vsx.org#13014.
+        var downloadsValue = Math.log1p(extension.getDownloadCount()) / stats.downloadRefLog;
         var timestamp = latest.getTimestamp();
         var timestampValue = Duration.between(stats.oldest, timestamp).toSeconds() / stats.timestampRef;
-        var relevance = ratingRelevance * limit(ratingValue) + downloadsRelevance * limit(downloadsValue)
-                + timestampRelevance * limit(timestampValue);
-        logger.debug("[{}] RELEVANCE: {} = {} * {} + {} * {} + {} * {}", extensionId, relevance, ratingRelevance, limit(ratingValue), downloadsRelevance, limit(downloadsValue), timestampRelevance, limit(timestampValue));
+        var ratingTerm = ratingRelevance * limit(ratingValue);
+        var downloadsTerm = downloadsRelevance * limit(downloadsValue);
+        var timestampTerm = timestampRelevance * limit(timestampValue);
+        var relevance = ratingTerm + downloadsTerm + timestampTerm;
+        logger.debug(
+                "[{}] RELEVANCE: {} = {} * {} + {} * {} + {} * {}",
+                extensionId,
+                relevance,
+                ratingRelevance,
+                limit(ratingValue),
+                downloadsRelevance,
+                limit(downloadsValue),
+                timestampRelevance,
+                limit(timestampValue));
         logger.debug("[{}] VALUES: {} | {} | {}", extensionId, ratingValue, downloadsValue, timestampValue);
 
         // Reduce the relevance value of unverified extensions
-        if (!isVerified(latest)) {
+        var unverified = !repositories.isVerifiedPublisher(latest);
+        if (unverified) {
             relevance *= unverifiedRelevance;
             logger.debug("[{}] UNVERIFIED: {} * {}", extensionId, relevance, unverifiedRelevance);
         }
 
         // Reduce the relevance value of deprecated extensions
-        if (extension.isDeprecated()) {
+        var deprecated = extension.isDeprecated();
+        if (deprecated) {
             relevance *= deprecatedRelevance;
             logger.debug("[{}] DEPRECATED: {} * {}", extensionId, relevance, deprecatedRelevance);
         }
 
         if (Double.isNaN(relevance) || Double.isInfinite(relevance)) {
             logger.debug("[{}] INVALID RELEVANCE", extensionId);
-            var message = "Invalid relevance for entry " + NamingUtil.toExtensionId(entry);
+            var message = "Invalid relevance for entry " + extensionId;
             try {
-                message += " " + new ObjectMapper().writeValueAsString(stats);
-            } catch (JsonProcessingException exc) {
+                message += " " + jsonMapper.writeValueAsString(stats);
+            } catch (JacksonException exc) {
                 // Ignore exception
             }
             logger.error(message);
@@ -120,41 +181,40 @@ public class RelevanceService {
         }
 
         logger.debug("<< [{}] CALCULATE RELEVANCE: {}", extensionId, relevance);
-        return relevance;
+        return new RelevanceBreakdown(
+                ratingTerm,
+                downloadsTerm,
+                timestampTerm,
+                unverified,
+                unverifiedRelevance,
+                deprecated,
+                deprecatedRelevance,
+                relevance);
     }
 
     private double limit(double value) {
-        if (value < 0.0)
-            return 0.0;
-        else if (value > 1.0)
-            return 1.0;
-        else
-            return value;
-    }
-
-    private double saturate(double value, double factor) {
-        return 1 - 1.0 / (value * factor + 1);
-    }
-
-    private boolean isVerified(ExtensionVersion extVersion) {
-        if (extVersion.getPublishedWith() == null)
-            return false;
-        var user = extVersion.getPublishedWith().getUser();
-        var namespace = extVersion.getExtension().getNamespace();
-        return repositories.isVerified(namespace, user);
+        return Math.clamp(value, 0.0, 1.0);
     }
 
     public static class SearchStats {
         protected final double downloadRef;
+
+        /**
+         * The download reference on the scale the relevance formula compares against. Kept alongside the
+         * raw maximum rather than replacing it: the raw one is what appears in the diagnostics written
+         * when a relevance comes out invalid, where a log would say much less about the registry.
+         */
+        protected final double downloadRefLog;
+
         protected final double timestampRef;
         protected final LocalDateTime oldest;
         protected final double averageReviewRating;
 
         public SearchStats(RepositoryService repositories) {
             var now = TimeUtil.getCurrentUTC();
-            var maxDownloads = repositories.getMaxExtensionDownloadCount();
             var oldestTimestamp = repositories.getOldestExtensionTimestamp();
-            this.downloadRef = maxDownloads * 1.5 + 100;
+            this.downloadRef = Math.max(repositories.getMaxExtensionDownloadCount(), 1);
+            this.downloadRefLog = Math.log1p(this.downloadRef);
             this.oldest = oldestTimestamp == null ? now : oldestTimestamp;
             this.timestampRef = Duration.between(this.oldest, now).toSeconds() + 60;
             this.averageReviewRating = repositories.getAverageReviewRating();

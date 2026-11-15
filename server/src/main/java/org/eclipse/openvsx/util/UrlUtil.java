@@ -1,20 +1,27 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.util;
 
-import jakarta.annotation.Nonnull;
+import java.net.URI;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Objects;
+import java.util.stream.Collectors;
+
 import jakarta.servlet.http.HttpServletRequest;
 import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.entities.ExtensionVersion;
-import org.eclipse.openvsx.json.ExtensionJson;
+import org.jspecify.annotations.NonNull;
 import org.springframework.data.util.Pair;
 import org.springframework.util.AntPathMatcher;
 import org.springframework.web.context.request.RequestContextHolder;
@@ -22,12 +29,8 @@ import org.springframework.web.context.request.ServletRequestAttributes;
 import org.springframework.web.servlet.HandlerMapping;
 import org.springframework.web.util.UriUtils;
 
-import jakarta.annotation.Nullable;
-import java.net.URI;
-import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
-import java.util.Objects;
-import java.util.stream.Collectors;
+import org.eclipse.openvsx.entities.ExtensionVersion;
+import org.eclipse.openvsx.json.ExtensionJson;
 
 public final class UrlUtil {
 
@@ -37,55 +40,114 @@ public final class UrlUtil {
     public static String createApiFileUrl(String baseUrl, ExtensionVersion extVersion, String fileName) {
         var extension = extVersion.getExtension();
         var namespaceName = extension.getNamespace().getName();
-        return createApiFileUrl(baseUrl, namespaceName, extension.getName(), extVersion.getTargetPlatform(), extVersion.getVersion(), fileName);
+        return createApiFileUrl(
+                baseUrl,
+                namespaceName,
+                extension.getName(),
+                extVersion.getTargetPlatform(),
+                extVersion.getVersion(),
+                fileName);
     }
 
-    public static String createApiFileUrl(String baseUrl, String namespaceName, String extensionName, String targetPlatform, String version, String fileName) {
-        return createApiFileUrl(createApiFileBaseUrl(baseUrl, namespaceName, extensionName, targetPlatform, version), fileName);
+    public static String createApiFileUrl(
+            String baseUrl,
+            String namespaceName,
+            String extensionName,
+            String targetPlatform,
+            String version,
+            String fileName
+    ) {
+        return createApiFileUrl(
+                createApiFileBaseUrl(baseUrl, namespaceName, extensionName, targetPlatform, version),
+                fileName);
     }
 
     public static String createApiFileUrl(String fileBaseUrl, String fileName) {
-        var segments = ArrayUtils.addAll(new String[]{"file"}, fileName.split("/"));
+        var segments = ArrayUtils.addAll(new String[] { "file" }, fileName.split("/"));
         return createApiUrl(fileBaseUrl, segments);
     }
 
     public static String createApiFileBaseUrl(String baseUrl, ExtensionVersion extVersion) {
         var extension = extVersion.getExtension();
         var namespaceName = extension.getNamespace().getName();
-        return createApiFileBaseUrl(baseUrl, namespaceName, extension.getName(), extVersion.getTargetPlatform(), extVersion.getVersion());
+        return createApiFileBaseUrl(
+                baseUrl,
+                namespaceName,
+                extension.getName(),
+                extVersion.getTargetPlatform(),
+                extVersion.getVersion());
     }
 
-    public static String createApiFileBaseUrl(String baseUrl, String namespaceName, String extensionName, String targetPlatform, String version) {
-        return createApiUrl(baseUrl, createApiVersionSegments(namespaceName, extensionName, targetPlatform, true, version));
+    public static String createApiFileBaseUrl(
+            String baseUrl,
+            String namespaceName,
+            String extensionName,
+            String targetPlatform,
+            String version
+    ) {
+        return createApiUrl(
+                baseUrl,
+                createApiVersionSegments(namespaceName, extensionName, targetPlatform, true, version));
     }
 
     public static String createApiVersionUrl(String baseUrl, ExtensionJson json) {
-        return createApiVersionUrl(baseUrl, json.getNamespace(), json.getName(), json.getTargetPlatform(), json.getVersion());
+        return createApiVersionUrl(
+                baseUrl,
+                json.getNamespace(),
+                json.getName(),
+                json.getTargetPlatform(),
+                json.getVersion());
     }
 
     public static String createApiVersionUrl(String baseUrl, ExtensionVersion extVersion) {
         var extension = extVersion.getExtension();
         var namespace = extension.getNamespace();
-        return createApiVersionUrl(baseUrl, namespace.getName(), extension.getName(), extVersion.getTargetPlatform(), extVersion.getVersion());
+        return createApiVersionUrl(
+                baseUrl,
+                namespace.getName(),
+                extension.getName(),
+                extVersion.getTargetPlatform(),
+                extVersion.getVersion());
     }
 
-    public static String createApiVersionUrl(String baseUrl, String namespaceName, String extensionName, String targetPlatform, String version) {
-        return createApiUrl(baseUrl, createApiVersionSegments(namespaceName, extensionName, targetPlatform, false, version));
+    public static String createApiVersionUrl(
+            String baseUrl,
+            String namespaceName,
+            String extensionName,
+            String targetPlatform,
+            String version
+    ) {
+        return createApiUrl(
+                baseUrl,
+                createApiVersionSegments(namespaceName, extensionName, targetPlatform, false, version));
     }
 
-    public static String createApiVersionBaseUrl(String baseUrl, String namespaceName, String extensionName, String targetPlatform) {
-        return createApiUrl(baseUrl, createApiVersionSegments(namespaceName, extensionName, targetPlatform,false, null));
+    public static String createApiVersionBaseUrl(
+            String baseUrl,
+            String namespaceName,
+            String extensionName,
+            String targetPlatform
+    ) {
+        return createApiUrl(
+                baseUrl,
+                createApiVersionSegments(namespaceName, extensionName, targetPlatform, false, null));
     }
 
-    private static String[] createApiVersionSegments(String namespaceName, String extensionName, String targetPlatform, boolean excludeUniversalTargetPlatform, String version) {
-        var segments = new String[]{ "api", namespaceName, extensionName };
-        if(excludeUniversalTargetPlatform && TargetPlatform.isUniversal(targetPlatform)) {
+    private static String[] createApiVersionSegments(
+            String namespaceName,
+            String extensionName,
+            String targetPlatform,
+            boolean excludeUniversalTargetPlatform,
+            String version
+    ) {
+        var segments = new String[] { "api", namespaceName, extensionName };
+        if (excludeUniversalTargetPlatform && TargetPlatform.isUniversal(targetPlatform)) {
             targetPlatform = null;
         }
-        if(targetPlatform != null) {
+        if (targetPlatform != null) {
             segments = ArrayUtils.add(segments, targetPlatform);
         }
-        if(version != null) {
+        if (version != null) {
             segments = ArrayUtils.add(segments, version);
         }
 
@@ -95,7 +157,7 @@ public final class UrlUtil {
     /**
      * Create a URL pointing to an API path.
      */
-    public static @Nonnull String createApiUrl(String baseUrl, String... segments) {
+    public static @NonNull String createApiUrl(String baseUrl, String... segments) {
         if (Arrays.stream(segments).anyMatch(Objects::isNull)) {
             throw new IllegalArgumentException("Argument to createApiUrl has been null");
         }
@@ -142,21 +204,24 @@ public final class UrlUtil {
      * value pairs, so its length is expected to be even.
      */
     public static String addQuery(String url, String... parameters) {
-        if (parameters.length % 2 != 0)
+        if (parameters.length % 2 != 0) {
             throw new IllegalArgumentException("Expected an even number of parameters.");
+        }
 
         var result = new StringBuilder(url);
         var printedParams = 0;
         for (var i = 0; i < parameters.length; i += 2) {
             var key = parameters[i];
             var value = parameters[i + 1];
-            if (key == null)
+            if (key == null) {
                 throw new NullPointerException("Parameter key must not be null");
+            }
             if (value != null) {
-                if (printedParams == 0)
+                if (printedParams == 0) {
                     result.append('?');
-                else
+                } else {
                     result.append('&');
+                }
                 result.append(key).append('=').append(UriUtils.encodeQueryParam(value, StandardCharsets.UTF_8));
                 printedParams++;
             }
@@ -188,14 +253,16 @@ public final class UrlUtil {
         var port = pair.getSecond();
         switch (scheme) {
             case "http":
-                if (port != 80 && port > 0)
+                if (port != 80 && port > 0) {
                     url.append(":").append(port);
+                }
                 break;
             case "https":
-                if (port != 443 && port > 0)
+                if (port != 443 && port > 0) {
                     url.append(":").append(port);
+                }
                 break;
-            default:
+            default :
                 throw new IllegalArgumentException("Unsupported scheme: " + scheme);
         }
 
@@ -220,7 +287,7 @@ public final class UrlUtil {
         return forwardedScheme != null ? forwardedScheme : request.getScheme();
     }
 
-    public static Pair<String,Integer> getBaseUrlHostAndPort(HttpServletRequest request) {
+    public static Pair<String, Integer> getBaseUrlHostAndPort(HttpServletRequest request) {
         // Use the host and port from the X-Forwarded-Host header if present
         var forwardedHostHeadersEnumeration = request.getHeaders("X-Forwarded-Host");
         if (forwardedHostHeadersEnumeration == null || !forwardedHostHeadersEnumeration.hasMoreElements()) {
@@ -234,7 +301,14 @@ public final class UrlUtil {
             if (forwardedHosts.length > 1) {
                 forwardedHost = forwardedHosts[0];
             }
+            // An IPv6 literal is bracketed and made of colons, so only a colon after the closing
+            // bracket separates a port - without this, `[2001:db8::1]` parses as the host
+            // `[2001:db8:` on a port that is not a number.
             int colonIndex = forwardedHost.lastIndexOf(':');
+            if (forwardedHost.startsWith("[")) {
+                var closingBracket = forwardedHost.indexOf(']');
+                colonIndex = closingBracket >= 0 && colonIndex > closingBracket ? colonIndex : -1;
+            }
             if (colonIndex > 0) {
                 int port;
                 try {
@@ -251,7 +325,9 @@ public final class UrlUtil {
     }
 
     public static String extractWildcardPath(HttpServletRequest request) {
-        return extractWildcardPath(request, (String) request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE));
+        return extractWildcardPath(
+                request,
+                (String) request.getAttribute(HandlerMapping.BEST_MATCHING_PATTERN_ATTRIBUTE));
     }
 
     /**
@@ -285,9 +361,14 @@ public final class UrlUtil {
         return createAllVersionsUrl(namespaceName, extensionName, targetPlatform, "versions");
     }
 
-    public static String createAllVersionsUrl(String namespaceName, String extensionName, String targetPlatform, String versionsSegment) {
-        var segments = new String[]{ "api", namespaceName, extensionName };
-        if(targetPlatform != null) {
+    public static String createAllVersionsUrl(
+            String namespaceName,
+            String extensionName,
+            String targetPlatform,
+            String versionsSegment
+    ) {
+        var segments = new String[] { "api", namespaceName, extensionName };
+        if (targetPlatform != null) {
             segments = ArrayUtils.add(segments, targetPlatform);
         }
 

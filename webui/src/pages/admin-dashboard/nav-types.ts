@@ -12,12 +12,23 @@
  *****************************************************************************/
 
 import { ReactNode } from 'react';
+import { AdminPermission } from '../../extension-registry-types';
 
 export interface RouteEntry {
     path: string;
     name: string;
     icon: ReactNode;
     description?: string;
+    /**
+     * The permission required to see and use this page. Omitted for a page any admin-dashboard
+     * user may see (a contributed page, or one gated by {@link adminOnly} instead).
+     */
+    permission?: AdminPermission;
+    /**
+     * Visible only to the `admin` role itself, not delegable via any permission - for actions that
+     * are privilege escalation (granting role/permissions), where "some capability" isn't enough.
+     */
+    adminOnly?: boolean;
 }
 
 export interface NavGroup {
@@ -29,3 +40,41 @@ export interface NavGroup {
 export type NavEntry = RouteEntry | NavGroup;
 
 export const isNavGroup = (entry: NavEntry): entry is NavGroup => 'children' in entry;
+
+/** Side panel and overview grouping for contributed admin pages. */
+export interface AdminPageCategory {
+    name: string;
+    icon: ReactNode;
+}
+
+/**
+ * An admin dashboard page contributed by a consumer through
+ * `PageSettings.elements.adminPages`. It shows up in the side panel, as a card on the
+ * dashboard overview, and as a route under the admin dashboard.
+ */
+export interface AdminPage {
+    /**
+     * Path below the admin dashboard root, without a leading slash (e.g. `'analytics/agents'`).
+     * The page also receives everything below it, so it may render nested routes of its own.
+     * A page whose first segment is one the built-in pages already use is ignored — contributed
+     * pages can only be added, never override a built-in one.
+     */
+    path: string;
+    name: string;
+    icon: ReactNode;
+    /** Shown under the page name on the dashboard overview. */
+    description?: string;
+    /**
+     * Groups the page in the side panel and on the overview. Pages sharing a category name are
+     * merged into one group, and a name matching a built-in group appends to that group.
+     * Without a category the page sits at the top level.
+     */
+    category?: AdminPageCategory;
+    /**
+     * The permission a user needs to see and open this page. Without it the page stays visible to
+     * the `admin` role only - which is what the whole dashboard required before permissions
+     * existed, so a page that does not opt in keeps the audience it already had.
+     */
+    permission?: AdminPermission;
+    element: ReactNode;
+}

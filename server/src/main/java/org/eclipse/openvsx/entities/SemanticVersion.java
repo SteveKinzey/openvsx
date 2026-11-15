@@ -1,17 +1,16 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
-
-import org.apache.commons.lang3.StringUtils;
-
-import jakarta.persistence.Embeddable;
 
 import java.io.Serial;
 import java.io.Serializable;
@@ -20,6 +19,9 @@ import java.util.Objects;
 import java.util.function.Supplier;
 import java.util.regex.Pattern;
 
+import jakarta.persistence.Embeddable;
+import org.apache.commons.lang3.StringUtils;
+
 @Embeddable
 public class SemanticVersion implements Comparable<SemanticVersion>, Serializable {
 
@@ -27,7 +29,8 @@ public class SemanticVersion implements Comparable<SemanticVersion>, Serializabl
     private static final long serialVersionUID = 1L;
 
     // source: https://semver.org/, search for: https://regex101.com/r/vkijKf/1/
-    public static final Pattern VERSION_PARSE_PATTERN = Pattern.compile("^(?<major>0|[1-9]\\d*)\\.(?<minor>0|[1-9]\\d*)\\.(?<patch>0|[1-9]\\d*)(?:-(?<prerelease>(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+(?<buildmetadata>[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$");
+    public static final Pattern VERSION_PARSE_PATTERN = Pattern.compile(
+            "^(?<major>0|[1-9]\\d*)\\.(?<minor>0|[1-9]\\d*)\\.(?<patch>0|[1-9]\\d*)(?:-(?<prerelease>(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+(?<buildmetadata>[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?$");
 
     // has been modified to only use non-capturing groups (?:.*), so that it can be used as a URI template regex
     public static final String VERSION_PATH_PARAM_REGEX = "(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)(?:-(?:(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\\.(?:0|[1-9]\\d*|\\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\\+(?:[0-9a-zA-Z-]+(?:\\.[0-9a-zA-Z-]+)*))?";
@@ -103,8 +106,12 @@ public class SemanticVersion implements Comparable<SemanticVersion>, Serializabl
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         SemanticVersion that = (SemanticVersion) o;
         return major == that.major
                 && minor == that.minor
@@ -125,13 +132,12 @@ public class SemanticVersion implements Comparable<SemanticVersion>, Serializabl
                 () -> Integer.compare(that.getMajor(), this.getMajor()),
                 () -> Integer.compare(that.getMinor(), this.getMinor()),
                 () -> Integer.compare(that.getPatch(), this.getPatch()),
-                () -> -Boolean.compare(that.isIsPreRelease(), this.isIsPreRelease())
-        );
+                () -> -Boolean.compare(that.isIsPreRelease(), this.isIsPreRelease()));
 
         var compare = 0;
-        for(var comparator : comparators) {
+        for (var comparator : comparators) {
             compare = comparator.get();
-            if(compare != 0) {
+            if (compare != 0) {
                 return compare;
             }
         }

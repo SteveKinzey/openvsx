@@ -1,26 +1,44 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.util;
 
-import static org.assertj.core.api.Assertions.assertThat;
-
-import com.google.common.collect.Lists;
+import java.util.List;
 
 import org.junit.jupiter.api.Test;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class CollectionUtilTest {
 
     @Test
     void testLimit() {
-        var source = Lists.newArrayList(1, 2, 3, 4, 5);
+        var source = List.of(1, 2, 3, 4, 5);
         var result = CollectionUtil.limit(source, 3);
-        assertThat(result).isEqualTo(Lists.newArrayList(1, 2, 3));
+        assertThat(result).isEqualTo(List.of(1, 2, 3));
+    }
+
+    @Test
+    void testPartition() {
+        assertThat(CollectionUtil.partition(List.of(1, 2, 3, 4, 5), 2))
+                .containsExactly(List.of(1, 2), List.of(3, 4), List.of(5));
+        assertThat(CollectionUtil.partition(List.of(1, 2, 3, 4), 2)).containsExactly(List.of(1, 2), List.of(3, 4));
+        assertThat(CollectionUtil.partition(List.of(1, 2), 5)).containsExactly(List.of(1, 2));
+        assertThat(CollectionUtil.partition(List.<Integer>of(), 3)).isEmpty();
+    }
+
+    @Test
+    void testPartitionRejectsNonPositiveSize() {
+        assertThatThrownBy(() -> CollectionUtil.partition(List.of(1), 0)).isInstanceOf(IllegalArgumentException.class);
     }
 }

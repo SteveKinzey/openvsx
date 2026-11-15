@@ -12,13 +12,13 @@
  *****************************************************************************/
 package org.eclipse.openvsx.cache.bucket4j;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.giffing.bucket4j.spring.boot.starter.config.cache.CacheManager;
 import com.giffing.bucket4j.spring.boot.starter.config.cache.CacheUpdateEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.RedisClusterClient;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 
 public class JedisClusterCacheManager<K, V> implements CacheManager<K, V> {
 
@@ -27,7 +27,7 @@ public class JedisClusterCacheManager<K, V> implements CacheManager<K, V> {
     private final RedisClusterClient redisClusterClient;
     private final String cacheName;
     private final Class<V> valueType;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper jsonMapper;
     private final String updateChannel;
 
     /**
@@ -40,18 +40,21 @@ public class JedisClusterCacheManager<K, V> implements CacheManager<K, V> {
         this.cacheName = cacheName;
         this.valueType = valueType;
 
-        this.objectMapper = new ObjectMapper();
+        this.jsonMapper = JsonMapper.builder().build();
         this.updateChannel = cacheName.concat(":update");
     }
-
 
     @Override
     public V getValue(K key) {
         try {
-            String serializedValue = redisClusterClient.hget(cacheName, objectMapper.writeValueAsString(key));
-            return serializedValue != null ? objectMapper.readValue(serializedValue, this.valueType) : null;
-        } catch (JsonProcessingException e) {
-            LOGGER.warn("Exception occurred while retrieving key '{}' from cache '{}'. Message: {}", key, cacheName, e.getMessage());
+            String serializedValue = redisClusterClient.hget(cacheName, jsonMapper.writeValueAsString(key));
+            return serializedValue != null ? jsonMapper.readValue(serializedValue, this.valueType) : null;
+        } catch (JacksonException e) {
+            LOGGER.warn(
+                    "Exception occurred while retrieving key '{}' from cache '{}'. Message: {}",
+                    key,
+                    cacheName,
+                    e.getMessage());
             return null;
         }
     }
@@ -61,19 +64,22 @@ public class JedisClusterCacheManager<K, V> implements CacheManager<K, V> {
         try {
             V oldValue = getValue(key);
 
-            String serializedKey = objectMapper.writeValueAsString(key);
-            String serializedValue = objectMapper.writeValueAsString(value);
+            String serializedKey = jsonMapper.writeValueAsString(key);
+            String serializedValue = jsonMapper.writeValueAsString(value);
             redisClusterClient.hset(this.cacheName, serializedKey, serializedValue);
 
-            //publish an update event if the key already existed
-            if(oldValue != null){
-                CacheUpdateEvent<K,V> updateEvent = new CacheUpdateEvent<>(key, oldValue, value);
-                redisClusterClient.publish(this.updateChannel, objectMapper.writeValueAsString(updateEvent));
+            // publish an update event if the key already existed
+            if (oldValue != null) {
+                CacheUpdateEvent<K, V> updateEvent = new CacheUpdateEvent<>(key, oldValue, value);
+                redisClusterClient.publish(this.updateChannel, jsonMapper.writeValueAsString(updateEvent));
             }
-        } catch (JsonProcessingException e) {
-            LOGGER.warn("Exception occurred while setting key '{}' in cache '{}'. Message: {}", key, cacheName, e.getMessage());
+        } catch (JacksonException e) {
+            LOGGER.warn(
+                    "Exception occurred while setting key '{}' in cache '{}'. Message: {}",
+                    key,
+                    cacheName,
+                    e.getMessage());
             throw new RuntimeException(e);
         }
     }
 }
-

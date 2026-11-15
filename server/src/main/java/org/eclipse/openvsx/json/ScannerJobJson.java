@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,16 +6,16 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.json;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import io.swagger.v3.oas.annotations.media.Schema;
-import jakarta.annotation.Nullable;
+import org.jspecify.annotations.Nullable;
 
 /**
  * JSON representation of a scanner job, exposing its current lifecycle state.
@@ -48,8 +48,10 @@ public class ScannerJobJson {
     @Nullable
     private String errorMessage;
 
-    @Schema(description = "Deep link to the external scanner's own dashboard for this job. " +
-        "Only populated for async scanners that configure external-url-template.")
+    @Schema(
+        description = "Deep link to the external scanner's own dashboard for this job. " +
+                "Only populated for async scanners that configure external-url-template."
+    )
     @Nullable
     private String externalUrl;
 

@@ -1,22 +1,26 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Adnan Al and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.storage;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import org.eclipse.openvsx.cache.FilesCacheKeyGenerator;
 import org.eclipse.openvsx.entities.Extension;
 import org.eclipse.openvsx.entities.ExtensionVersion;
 import org.eclipse.openvsx.entities.FileResource;
 import org.eclipse.openvsx.entities.Namespace;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -37,7 +41,7 @@ class AwsStorageServiceTest {
         var fileCacheDurationConfig = new FileCacheDurationConfig();
         var filesCacheKeyGenerator = new FilesCacheKeyGenerator();
         storageService = new AwsStorageService(fileCacheDurationConfig, filesCacheKeyGenerator);
-        
+
         // Set up test entities
         setupTestEntities();
     }
@@ -66,7 +70,7 @@ class AwsStorageServiceTest {
         // Test with no credentials
         ReflectionTestUtils.setField(storageService, "accessKeyId", "");
         ReflectionTestUtils.setField(storageService, "secretAccessKey", "");
-        
+
         assertFalse(storageService.isEnabled(), "Service should not be enabled without credentials");
     }
 
@@ -77,7 +81,7 @@ class AwsStorageServiceTest {
         ReflectionTestUtils.setField(storageService, "secretAccessKey", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
         ReflectionTestUtils.setField(storageService, "region", "us-east-1");
         ReflectionTestUtils.setField(storageService, "bucket", "test-bucket");
-        
+
         assertTrue(storageService.isEnabled(), "Service should be enabled with static credentials");
     }
 
@@ -86,7 +90,7 @@ class AwsStorageServiceTest {
         // Test with both access key and secret key
         ReflectionTestUtils.setField(storageService, "accessKeyId", "AKIAIOSFODNN7EXAMPLE");
         ReflectionTestUtils.setField(storageService, "secretAccessKey", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
-        
+
         Boolean hasCredentials = ReflectionTestUtils.invokeMethod(storageService, "hasStaticCredentials");
         assertTrue(hasCredentials, "Should detect static credentials when both access key and secret key are present");
 
@@ -106,7 +110,7 @@ class AwsStorageServiceTest {
     void testHasSessionToken() {
         // Test with session token
         ReflectionTestUtils.setField(storageService, "sessionToken", "AQoDYXdzEJr...<remainder of security token>");
-        
+
         Boolean hasToken = ReflectionTestUtils.invokeMethod(storageService, "hasSessionToken");
         assertTrue(hasToken, "Should detect session token when present");
 
@@ -127,7 +131,7 @@ class AwsStorageServiceTest {
         ReflectionTestUtils.setField(storageService, "accessKeyId", "AKIAIOSFODNN7EXAMPLE");
         ReflectionTestUtils.setField(storageService, "secretAccessKey", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
         ReflectionTestUtils.setField(storageService, "sessionToken", "");
-        
+
         Boolean hasStaticCreds1 = ReflectionTestUtils.invokeMethod(storageService, "hasStaticCredentials");
         Boolean hasSessionToken1 = ReflectionTestUtils.invokeMethod(storageService, "hasSessionToken");
         assertTrue(hasStaticCreds1);
@@ -135,7 +139,7 @@ class AwsStorageServiceTest {
 
         // Test 2: Static credentials with session token (temporary credentials)
         ReflectionTestUtils.setField(storageService, "sessionToken", "AQoDYXdzEJr...<remainder of security token>");
-        
+
         Boolean hasStaticCreds2 = ReflectionTestUtils.invokeMethod(storageService, "hasStaticCredentials");
         Boolean hasSessionToken2 = ReflectionTestUtils.invokeMethod(storageService, "hasSessionToken");
         assertTrue(hasStaticCreds2);
@@ -145,7 +149,7 @@ class AwsStorageServiceTest {
         ReflectionTestUtils.setField(storageService, "accessKeyId", "");
         ReflectionTestUtils.setField(storageService, "secretAccessKey", "");
         ReflectionTestUtils.setField(storageService, "sessionToken", "");
-        
+
         Boolean hasStaticCreds3 = ReflectionTestUtils.invokeMethod(storageService, "hasStaticCredentials");
         Boolean hasSessionToken3 = ReflectionTestUtils.invokeMethod(storageService, "hasSessionToken");
         assertFalse(hasStaticCreds3);
@@ -169,6 +173,31 @@ class AwsStorageServiceTest {
     }
 
     @Test
+    void testObjectKeyAsUrlPathEncodesPlusSign() {
+        // Semver build metadata, see https://github.com/eclipse-openvsx/openvsx/issues/1459
+        extVersion.setVersion("1.0.0+10");
+
+        // The object key must keep the literal '+': it identifies the stored object, and changing it
+        // would leave every file published so far unreachable.
+        assertEquals(
+                "testnamespace/test-extension/1.0.0+10/extension.vsix",
+                ReflectionTestUtils.invokeMethod(storageService, "getObjectKey", resource));
+
+        // S3 reads a '+' in a URL path as a space, so the URL form has to escape it.
+        assertEquals(
+                "testnamespace/test-extension/1.0.0%2B10/extension.vsix",
+                storageService.getObjectKeyAsUrlPath(resource));
+    }
+
+    @Test
+    void testObjectKeyAsUrlPathKeepsKeysWithoutPlusSign() {
+        assertEquals(
+                "testnamespace/test-extension/1.0.0/extension.vsix",
+                storageService.getObjectKeyAsUrlPath(resource));
+        assertEquals("testnamespace/logo/logo.png", storageService.getObjectKeyAsUrlPath(namespace));
+    }
+
+    @Test
     void testObjectKeyGenerationWithComplexNames() {
         // Test with complex namespace and extension names
         namespace.setName("my-complex-namespace");
@@ -177,17 +206,19 @@ class AwsStorageServiceTest {
         resource.setName("complex/path/extension.vsix");
 
         var objectKey = (String) ReflectionTestUtils.invokeMethod(storageService, "getObjectKey", resource);
-        assertEquals("my-complex-namespace/my.complex.extension-name/2.1.0-beta.1/complex/path/extension.vsix", objectKey);
+        assertEquals(
+                "my-complex-namespace/my.complex.extension-name/2.1.0-beta.1/complex/path/extension.vsix",
+                objectKey);
     }
 
     @Test
     void testObjectKeyGenerationWithDifferentTargetPlatforms() {
-        String[] platforms = {"universal", "win32-x64", "linux-x64", "darwin-x64", "darwin-arm64"};
-        
+        String[] platforms = { "universal", "win32-x64", "linux-x64", "darwin-x64", "darwin-arm64" };
+
         for (String platform : platforms) {
             extVersion.setTargetPlatform(platform);
             var objectKey = (String) ReflectionTestUtils.invokeMethod(storageService, "getObjectKey", resource);
-            
+
             if ("universal".equals(platform)) {
                 assertEquals("testnamespace/test-extension/1.0.0/extension.vsix", objectKey);
             } else {
@@ -199,8 +230,8 @@ class AwsStorageServiceTest {
     @Test
     void testNamespaceLogoObjectKeyGeneration() {
         // Test different logo file types
-        String[] logoNames = {"logo.png", "logo.jpg", "logo.svg", "namespace-logo.webp"};
-        
+        String[] logoNames = { "logo.png", "logo.jpg", "logo.svg", "namespace-logo.webp" };
+
         for (String logoName : logoNames) {
             namespace.setLogoName(logoName);
             var logoKey = (String) ReflectionTestUtils.invokeMethod(storageService, "getObjectKey", namespace);
@@ -225,7 +256,9 @@ class AwsStorageServiceTest {
         assertEquals("test-session-token", ReflectionTestUtils.getField(storageService, "sessionToken"));
         assertEquals("us-west-2", ReflectionTestUtils.getField(storageService, "region"));
         assertEquals("my-test-bucket", ReflectionTestUtils.getField(storageService, "bucket"));
-        assertEquals("https://s3.us-west-2.amazonaws.com", ReflectionTestUtils.getField(storageService, "serviceEndpoint"));
+        assertEquals(
+                "https://s3.us-west-2.amazonaws.com",
+                ReflectionTestUtils.getField(storageService, "serviceEndpoint"));
         assertTrue((Boolean) ReflectionTestUtils.getField(storageService, "pathStyleAccess"));
     }
 
@@ -235,13 +268,13 @@ class AwsStorageServiceTest {
         ReflectionTestUtils.setField(storageService, "accessKeyId", "AKIAIOSFODNN7EXAMPLE");
         ReflectionTestUtils.setField(storageService, "secretAccessKey", "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY");
         ReflectionTestUtils.setField(storageService, "sessionToken", "");
-        
+
         assertTrue((Boolean) ReflectionTestUtils.invokeMethod(storageService, "hasStaticCredentials"));
         assertFalse((Boolean) ReflectionTestUtils.invokeMethod(storageService, "hasSessionToken"));
 
         // Test session token detection
         ReflectionTestUtils.setField(storageService, "sessionToken", "test-session-token");
-        
+
         assertTrue((Boolean) ReflectionTestUtils.invokeMethod(storageService, "hasStaticCredentials"));
         assertTrue((Boolean) ReflectionTestUtils.invokeMethod(storageService, "hasSessionToken"));
 
@@ -249,7 +282,7 @@ class AwsStorageServiceTest {
         ReflectionTestUtils.setField(storageService, "accessKeyId", "");
         ReflectionTestUtils.setField(storageService, "secretAccessKey", "");
         ReflectionTestUtils.setField(storageService, "sessionToken", "");
-        
+
         assertFalse((Boolean) ReflectionTestUtils.invokeMethod(storageService, "hasStaticCredentials"));
         assertFalse((Boolean) ReflectionTestUtils.invokeMethod(storageService, "hasSessionToken"));
     }
@@ -264,14 +297,17 @@ class AwsStorageServiceTest {
         var presigner2 = ReflectionTestUtils.invokeMethod(storageService, "getS3Presigner");
 
         assertNotNull(presigner1);
-        assertSame(presigner1, presigner2,
+        assertSame(
+                presigner1,
+                presigner2,
                 "S3Presigner must be cached as a singleton; recreating it on each call " +
-                "destroys the HTTP connection pool needed for IRSA credential refresh");
+                        "destroys the HTTP connection pool needed for IRSA credential refresh");
     }
 
     @Test
     void testPresignerFieldInitiallyNull() {
-        assertNull(ReflectionTestUtils.getField(storageService, "s3Presigner"),
+        assertNull(
+                ReflectionTestUtils.getField(storageService, "s3Presigner"),
                 "S3Presigner should be lazily initialized");
     }
 }

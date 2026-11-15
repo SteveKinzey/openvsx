@@ -1,13 +1,19 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2023 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.migration;
+
+import java.time.Instant;
+import java.util.UUID;
 
 import org.jobrunr.scheduling.JobRequestScheduler;
 import org.slf4j.Logger;
@@ -17,16 +23,11 @@ import org.springframework.boot.context.event.ApplicationStartedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.stereotype.Component;
 
-import java.nio.charset.StandardCharsets;
-import java.time.Instant;
-import java.util.UUID;
+import org.eclipse.openvsx.util.UUIDService;
 
 @Component
 public class ScheduleMigrationsListener {
-
     protected final Logger logger = LoggerFactory.getLogger(ScheduleMigrationsListener.class);
-
-    private final JobRequestScheduler scheduler;
 
     @Value("${ovsx.migrations.delay.seconds:0}")
     long delay;
@@ -37,16 +38,20 @@ public class ScheduleMigrationsListener {
     @Value("${ovsx.registry.version:}")
     String registryVersion;
 
-    public ScheduleMigrationsListener(JobRequestScheduler scheduler) {
+    private final JobRequestScheduler scheduler;
+    private final UUIDService uuidService;
+
+    public ScheduleMigrationsListener(JobRequestScheduler scheduler, UUIDService uuidService) {
         this.scheduler = scheduler;
+        this.uuidService = uuidService;
     }
 
     @EventListener
     public void applicationStarted(ApplicationStartedEvent event) {
         UUID jobId = null;
-        if(runMigrationsOncePerVersion) {
+        if (runMigrationsOncePerVersion) {
             var jobIdText = "MigrationScheduler::" + registryVersion;
-            jobId = UUID.nameUUIDFromBytes(jobIdText.getBytes(StandardCharsets.UTF_8));
+            jobId = uuidService.generateFromName(jobIdText);
         }
 
         var instant = Instant.now().plusSeconds(delay);

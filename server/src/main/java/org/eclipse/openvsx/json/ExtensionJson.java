@@ -1,13 +1,20 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.json;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
@@ -15,10 +22,6 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.NotNull;
-
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
 
 import static org.eclipse.openvsx.util.TargetPlatform.*;
 
@@ -43,7 +46,9 @@ public class ExtensionJson extends ResultJson {
     @NotNull
     private String reviewsUrl;
 
-    @Schema(description = "Map of file types (download, manifest, icon, readme, license, changelog) to their respective URLs")
+    @Schema(
+        description = "Map of file types (download, manifest, icon, readme, license, changelog) to their respective URLs"
+    )
     private Map<String, String> files;
 
     @Schema(description = "Name of the extension")
@@ -54,13 +59,23 @@ public class ExtensionJson extends ResultJson {
     @NotNull
     private String namespace;
 
-    @Schema(description = "Name of the target platform", allowableValues = {
-            NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-            NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-            NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-            NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-            NAME_WEB, NAME_UNIVERSAL
-    })
+    @Schema(
+        description = "Name of the target platform",
+        allowableValues = {
+            NAME_WIN32_X64,
+            NAME_WIN32_IA32,
+            NAME_WIN32_ARM64,
+            NAME_LINUX_X64,
+            NAME_LINUX_ARM64,
+            NAME_LINUX_ARMHF,
+            NAME_ALPINE_X64,
+            NAME_ALPINE_ARM64,
+            NAME_DARWIN_X64,
+            NAME_DARWIN_ARM64,
+            NAME_WEB,
+            NAME_UNIVERSAL
+        }
+    )
     private String targetPlatform;
 
     @Schema(description = "Selected version, or the latest version if none was specified")
@@ -74,40 +89,45 @@ public class ExtensionJson extends ResultJson {
     @NotNull
     private UserJson publishedBy;
 
+    @Schema(description = "Indicates whether this version was published using trusted publishing")
+    @NotNull
+    private Boolean publishedWithTrustedPublishing;
+
     @Schema(hidden = true)
     private Boolean active;
-    
-    @Schema(description = "Review/publishing status: published (active and visible to all), under_review (being reviewed), rejected (blocked)", 
-            allowableValues = {"published", "under_review", "rejected"})
+
+    @Schema(hidden = true)
+    private Boolean removed;
+
+    @Schema(
+        description = "Review/publishing status: published (active and visible to all), under_review (being reviewed), rejected (blocked)",
+        allowableValues = { "published", "under_review", "rejected" }
+    )
     private String reviewStatus;
-    
+
     @Schema(description = "Message explaining the review status (e.g., why extension was quarantined or rejected)")
     private String reviewMessage;
 
-    @Schema(description = "The value 'true' means the publishing user is a privileged user or the publishing user is a member of the extension's namespace and the namespace has at least one owner.")
+    @Schema(
+        description = "The value 'true' means the publishing user is a privileged user or the publishing user is a member of the extension's namespace and the namespace has at least one owner."
+    )
     @NotNull
     private Boolean verified;
 
     /**
-     * @deprecated
+     * True when this version's latest scan recorded a namespace-ownership-check threat, i.e. the
+     * namespace it was published to already exists in a referenced external gallery and is not
+     * verified. Internal signal for the webui, not part of the documented public API.
      */
-    @Schema(description = "Deprecated: use 'verified' instead (this property is just the negation of 'verified')")
-    @NotNull
-    @Deprecated
-    private Boolean unrelatedPublisher;
+    @Schema(hidden = true)
+    private Boolean namespaceOwnershipConflict;
 
     /**
      * @deprecated
      */
-    @Schema(description = "Access level of the extension's namespace. Deprecated: namespaces are now always restricted", allowableValues = {"public", "restricted"})
-    @NotNull
-    @Deprecated
-    private String namespaceAccess;
-
-    /**
-     * @deprecated
-     */
-    @Schema(description = "Map of available versions to their metadata URLs. Deprecated: only returns the last 100 versions. Use allVersionsUrl instead.")
+    @Schema(
+        description = "Map of available versions to their metadata URLs. Deprecated: only returns the last 100 versions. Use allVersionsUrl instead."
+    )
     @Deprecated
     private Map<String, String> allVersions;
 
@@ -151,7 +171,9 @@ public class ExtensionJson extends ResultJson {
 
     private List<String> categories;
 
-    @Schema(description = "A list that indicates where the extension should run in remote configurations. Values are \"ui\" (run locally), \"workspace\" (run on remote machine) and \"web\"")
+    @Schema(
+        description = "A list that indicates where the extension should run in remote configurations. Values are \"ui\" (run locally), \"workspace\" (run on remote machine) and \"web\""
+    )
     private List<String> extensionKind;
 
     private List<String> tags;
@@ -171,13 +193,16 @@ public class ExtensionJson extends ResultJson {
     @Schema(description = "URL of the extension's bug tracker")
     private String bugs;
 
-    @Schema(description = "Markdown rendering engine to use in user interfaces", allowableValues = {"standard", "github"})
+    @Schema(
+        description = "Markdown rendering engine to use in user interfaces",
+        allowableValues = { "standard", "github" }
+    )
     private String markdown;
 
     @Schema(description = "CSS color to use as background in user interfaces")
     private String galleryColor;
 
-    @Schema(description = "Theme type for user interfaces", allowableValues = {"light", "dark"})
+    @Schema(description = "Theme type for user interfaces", allowableValues = { "light", "dark" })
     private String galleryTheme;
 
     @Schema(description = "Languages the extension has been translated in")
@@ -197,6 +222,15 @@ public class ExtensionJson extends ResultJson {
 
     @Schema(description = "Map of download links by target platform")
     private Map<String, String> downloads;
+
+    @Schema(
+        description = "Map of package sizes in bytes by target platform, for the same platforms as "
+                + "'downloads'. A platform is left out where its size is not known, which is the case for "
+                + "packages published before the registry started recording sizes and not yet backfilled. "
+                + "This is the download size; the installed extension is larger by the package's "
+                + "compression ratio."
+    )
+    private Map<String, Long> downloadSizes;
 
     @Schema(description = "Map of target platforms by extension version")
     private List<VersionTargetPlatformsJson> allTargetPlatformVersions;
@@ -285,6 +319,14 @@ public class ExtensionJson extends ResultJson {
         this.publishedBy = publishedBy;
     }
 
+    public Boolean getPublishedWithTrustedPublishing() {
+        return publishedWithTrustedPublishing;
+    }
+
+    public void setPublishedWithTrustedPublishing(Boolean publishedWithTrustedPublishing) {
+        this.publishedWithTrustedPublishing = publishedWithTrustedPublishing;
+    }
+
     public Boolean getActive() {
         return active;
     }
@@ -292,19 +334,27 @@ public class ExtensionJson extends ResultJson {
     public void setActive(Boolean active) {
         this.active = active;
     }
-    
+
+    public Boolean getRemoved() {
+        return removed;
+    }
+
+    public void setRemoved(Boolean removed) {
+        this.removed = removed;
+    }
+
     public String getReviewStatus() {
         return reviewStatus;
     }
-    
+
     public void setReviewStatus(String reviewStatus) {
         this.reviewStatus = reviewStatus;
     }
-    
+
     public String getReviewMessage() {
         return reviewMessage;
     }
-    
+
     public void setReviewMessage(String reviewMessage) {
         this.reviewMessage = reviewMessage;
     }
@@ -317,20 +367,12 @@ public class ExtensionJson extends ResultJson {
         this.verified = verified;
     }
 
-    public Boolean getUnrelatedPublisher() {
-        return unrelatedPublisher;
+    public Boolean getNamespaceOwnershipConflict() {
+        return namespaceOwnershipConflict;
     }
 
-    public void setUnrelatedPublisher(Boolean unrelatedPublisher) {
-        this.unrelatedPublisher = unrelatedPublisher;
-    }
-
-    public String getNamespaceAccess() {
-        return namespaceAccess;
-    }
-
-    public void setNamespaceAccess(String namespaceAccess) {
-        this.namespaceAccess = namespaceAccess;
+    public void setNamespaceOwnershipConflict(Boolean namespaceOwnershipConflict) {
+        this.namespaceOwnershipConflict = namespaceOwnershipConflict;
     }
 
     public Map<String, String> getAllVersions() {
@@ -565,6 +607,14 @@ public class ExtensionJson extends ResultJson {
         this.downloads = downloads;
     }
 
+    public Map<String, Long> getDownloadSizes() {
+        return downloadSizes;
+    }
+
+    public void setDownloadSizes(Map<String, Long> downloadSizes) {
+        this.downloadSizes = downloadSizes;
+    }
+
     public List<VersionTargetPlatformsJson> getAllTargetPlatformVersions() {
         return allTargetPlatformVersions;
     }
@@ -607,8 +657,12 @@ public class ExtensionJson extends ResultJson {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         ExtensionJson that = (ExtensionJson) o;
         return Objects.equals(namespaceUrl, that.namespaceUrl)
                 && Objects.equals(reviewsUrl, that.reviewsUrl)
@@ -620,11 +674,11 @@ public class ExtensionJson extends ResultJson {
                 && Objects.equals(preRelease, that.preRelease)
                 && Objects.equals(publishedBy, that.publishedBy)
                 && Objects.equals(active, that.active)
+                && Objects.equals(removed, that.removed)
                 && Objects.equals(reviewStatus, that.reviewStatus)
                 && Objects.equals(reviewMessage, that.reviewMessage)
                 && Objects.equals(verified, that.verified)
-                && Objects.equals(unrelatedPublisher, that.unrelatedPublisher)
-                && Objects.equals(namespaceAccess, that.namespaceAccess)
+                && Objects.equals(namespaceOwnershipConflict, that.namespaceOwnershipConflict)
                 && Objects.equals(allVersions, that.allVersions)
                 && Objects.equals(allVersionsUrl, that.allVersionsUrl)
                 && Objects.equals(averageRating, that.averageRating)
@@ -651,6 +705,7 @@ public class ExtensionJson extends ResultJson {
                 && Objects.equals(dependencies, that.dependencies)
                 && Objects.equals(bundledExtensions, that.bundledExtensions)
                 && Objects.equals(downloads, that.downloads)
+                && Objects.equals(downloadSizes, that.downloadSizes)
                 && Objects.equals(allTargetPlatformVersions, that.allTargetPlatformVersions)
                 && Objects.equals(url, that.url)
                 && Objects.equals(deprecated, that.deprecated)
@@ -661,11 +716,52 @@ public class ExtensionJson extends ResultJson {
     @Override
     public int hashCode() {
         return Objects.hash(
-                namespaceUrl, reviewsUrl, files, name, namespace, targetPlatform, version, preRelease, publishedBy,
-                active, reviewStatus, reviewMessage, verified, unrelatedPublisher, namespaceAccess, allVersions, allVersionsUrl, averageRating,
-                downloadCount, reviewCount, versionAlias, timestamp, preview, displayName, description, engines, categories,
-                extensionKind, tags, license, homepage, repository, bugs, markdown, galleryColor, galleryTheme, qna, badges,
-                dependencies, bundledExtensions, downloads, allTargetPlatformVersions, url, deprecated, replacement, downloadable
-        );
+                namespaceUrl,
+                reviewsUrl,
+                files,
+                name,
+                namespace,
+                targetPlatform,
+                version,
+                preRelease,
+                publishedBy,
+                active,
+                removed,
+                reviewStatus,
+                reviewMessage,
+                verified,
+                namespaceOwnershipConflict,
+                allVersions,
+                allVersionsUrl,
+                averageRating,
+                downloadCount,
+                reviewCount,
+                versionAlias,
+                timestamp,
+                preview,
+                displayName,
+                description,
+                engines,
+                categories,
+                extensionKind,
+                tags,
+                license,
+                homepage,
+                repository,
+                bugs,
+                markdown,
+                galleryColor,
+                galleryTheme,
+                qna,
+                badges,
+                dependencies,
+                bundledExtensions,
+                downloads,
+                downloadSizes,
+                allTargetPlatformVersions,
+                url,
+                deprecated,
+                replacement,
+                downloadable);
     }
 }

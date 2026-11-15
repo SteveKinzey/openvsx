@@ -1,21 +1,25 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
-
-import jakarta.persistence.*;
-
-import org.eclipse.openvsx.json.NamespaceMembershipJson;
 
 import java.io.Serial;
 import java.io.Serializable;
 import java.util.Objects;
+import java.util.Optional;
+
+import jakarta.persistence.*;
+
+import org.eclipse.openvsx.json.NamespaceMembershipJson;
 
 @Entity
 public class NamespaceMembership implements Serializable {
@@ -46,8 +50,7 @@ public class NamespaceMembership implements Serializable {
         return new NamespaceMembershipJson(
                 this.namespace.getName(),
                 this.role,
-                this.user.toUserJson()
-        );
+                this.user.toUserJson());
     }
 
     public long getId() {
@@ -55,9 +58,9 @@ public class NamespaceMembership implements Serializable {
     }
 
     public void setId(long id) {
-		this.id = id;
+        this.id = id;
     }
-    
+
     public UserData getUser() {
         return user;
     }
@@ -82,19 +85,32 @@ public class NamespaceMembership implements Serializable {
         this.role = role;
     }
 
+    // namespace and user uses id comparison to prevent infinite recursion
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         NamespaceMembership that = (NamespaceMembership) o;
         return id == that.id
-                && Objects.equals(namespace, that.namespace)
-                && Objects.equals(user, that.user)
+                && Objects.equals(getId(namespace), getId(that.namespace))
+                && Objects.equals(getId(user), getId(that.user))
                 && Objects.equals(role, that.role);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, namespace, user, role);
+        return Objects.hash(id, getId(namespace), getId(user), role);
+    }
+
+    private Long getId(Namespace namespace) {
+        return Optional.ofNullable(namespace).map(Namespace::getId).orElse(null);
+    }
+
+    private Long getId(UserData user) {
+        return Optional.ofNullable(user).map(UserData::getId).orElse(null);
     }
 }

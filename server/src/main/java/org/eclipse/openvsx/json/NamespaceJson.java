@@ -1,20 +1,23 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.json;
+
+import java.util.Map;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import com.fasterxml.jackson.annotation.JsonInclude.Include;
 import io.swagger.v3.oas.annotations.media.Schema;
 import jakarta.validation.constraints.NotNull;
-
-import java.util.Map;
 
 @Schema(
     name = "Namespace",
@@ -40,16 +43,6 @@ public class NamespaceJson extends ResultJson {
     @NotNull
     private Boolean verified;
 
-    /**
-     * @deprecated
-     */
-    @Schema(
-        description = "Access level of the namespace. Deprecated: namespaces are now always restricted",
-        allowableValues = {"public", "restricted"}
-    )
-    @Deprecated
-    private String access;
-
     @Schema(hidden = true)
     private String membersUrl;
 
@@ -58,6 +51,9 @@ public class NamespaceJson extends ResultJson {
 
     @Schema(hidden = true)
     private String detailsUrl;
+
+    @Schema(hidden = true)
+    private String trustedPublishingUrl;
 
     public String getName() {
         return name;
@@ -83,14 +79,6 @@ public class NamespaceJson extends ResultJson {
         this.verified = verified;
     }
 
-    public String getAccess() {
-        return access;
-    }
-
-    public void setAccess(String access) {
-        this.access = access;
-    }
-
     public String getMembersUrl() {
         return membersUrl;
     }
@@ -113,5 +101,13 @@ public class NamespaceJson extends ResultJson {
 
     public void setDetailsUrl(String detailsUrl) {
         this.detailsUrl = detailsUrl;
+    }
+
+    public String getTrustedPublishingUrl() {
+        return trustedPublishingUrl;
+    }
+
+    public void setTrustedPublishingUrl(String trustedPublishingUrl) {
+        this.trustedPublishingUrl = trustedPublishingUrl;
     }
 }

@@ -1,17 +1,21 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.adapter;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.DeserializationFeature;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
 import io.micrometer.observation.annotation.Observed;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
@@ -21,28 +25,31 @@ import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
 import jakarta.servlet.http.HttpServletRequest;
-import org.eclipse.openvsx.util.ErrorResultException;
-import org.eclipse.openvsx.util.NotFoundException;
-import org.eclipse.openvsx.util.TargetPlatform;
-import org.eclipse.openvsx.util.UrlUtil;
+import jakarta.validation.constraints.Pattern;
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.CacheControl;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
 
-import java.net.URI;
-import java.util.List;
-import java.util.concurrent.TimeUnit;
+import org.eclipse.openvsx.util.ErrorResultException;
+import org.eclipse.openvsx.util.NotFoundException;
+import org.eclipse.openvsx.util.TargetPlatform;
+import org.eclipse.openvsx.util.UrlUtil;
 
 import static org.eclipse.openvsx.adapter.ExtensionQueryResult.ExtensionFile.*;
 import static org.eclipse.openvsx.util.TargetPlatform.*;
 
 @RestController
+@Validated
 public class VSCodeAPI {
     private static final int DEFAULT_PAGE_SIZE = 20;
     private static final Logger logger = LoggerFactory.getLogger(VSCodeAPI.class);
@@ -51,18 +58,19 @@ public class VSCodeAPI {
     private final UpstreamVSCodeService upstream;
     private final List<IVSCodeService> registries;
     private final IExtensionQueryRequestHandler extensionQueryRequestHandler;
-    private final ObjectMapper objectMapper;
+    private final JsonMapper jsonMapper;
 
     public VSCodeAPI(
             LocalVSCodeService local,
             UpstreamVSCodeService upstream,
-            IExtensionQueryRequestHandler extensionQueryRequestHandler
+            IExtensionQueryRequestHandler extensionQueryRequestHandler,
+            JsonMapper jsonMapper
     ) {
         this.local = local;
         this.upstream = upstream;
         this.registries = setupRegistries();
         this.extensionQueryRequestHandler = extensionQueryRequestHandler;
-        this.objectMapper = new ObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+        this.jsonMapper = jsonMapper;
     }
 
     private List<IVSCodeService> setupRegistries() {
@@ -85,10 +93,13 @@ public class VSCodeAPI {
     @CrossOrigin
     @Operation(summary = "Provides metadata of extensions matching the given parameters")
     @ApiResponse(
-            responseCode = "200",
-            description = "Returns the query results"
+        responseCode = "200",
+        description = "Returns the query results"
     )
-    public ExtensionQueryResult extensionQuery(@RequestBody @Parameter(description = "Parameters of the extension query") ExtensionQueryParam param) {
+    public ExtensionQueryResult extensionQuery(
+            @RequestBody
+            @Parameter(description = "Parameters of the extension query") ExtensionQueryParam param
+    ) {
         var size = 0;
         if (param.filters() != null && !param.filters().isEmpty()) {
             size = param.filters().getFirst().pageSize();
@@ -101,22 +112,26 @@ public class VSCodeAPI {
     }
 
     @GetMapping(
-            path = "/vscode/gallery/extensionquery",
-            produces = MediaType.APPLICATION_JSON_VALUE
+        path = "/vscode/gallery/extensionquery",
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
     @Operation(summary = "Provides metadata of extensions matching the given parameters")
     @ApiResponse(
-            responseCode = "200",
-            description = "Returns the query results"
+        responseCode = "200",
+        description = "Returns the query results"
     )
     public ResponseEntity<ExtensionQueryResult> extensionQueryAsGet(@RequestParam(value = "q") String query) {
         ExtensionQueryParam param;
 
         try {
-            param = objectMapper.readValue(query, ExtensionQueryParam.class);
-        } catch (JsonProcessingException ex) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid extension query");
+            param = jsonMapper.readValue(query, ExtensionQueryParam.class);
+        } catch (JacksonException ex) {
+            // include the parser's message: it is what actually gets logged when Spring resolves
+            // this exception, and it is often the only clue that e.g. a proxy double-encoded `q`.
+            // Sanitized/bounded since it can echo back attacker-controlled input and Jackson
+            // messages can be long.
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid extension query" + describe(ex));
         }
 
         var size = 0;
@@ -137,69 +152,111 @@ public class VSCodeAPI {
                 .body(result);
     }
 
+    /**
+     * A short, control-character-free description of a JacksonException suitable for a
+     * ResponseStatusException reason: the raw message can be arbitrarily long and may echo back
+     * parts of the (attacker-controlled) query string.
+     */
+    private static String describe(JacksonException ex) {
+        var message = ex.getMessage();
+        if (message == null) {
+            return "";
+        }
+
+        var singleLine = message.replaceAll("[\\r\\n\\p{Cntrl}]+", " ").trim();
+        return singleLine.isEmpty() ? "" : ": " + StringUtils.abbreviate(singleLine, 200);
+    }
+
     @Observed
     @GetMapping("/vscode/asset/{namespaceName}/{extensionName}/{version}/{assetType}/**")
     @CrossOrigin
     @Operation(summary = "Access an extension asset")
     @ApiResponse(
-            responseCode = "200",
-            description = "The file content is returned",
-            content = @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+        responseCode = "200",
+        description = "The file content is returned",
+        content = @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE)
     )
     @ApiResponse(
-            responseCode = "302",
-            description = "The asset is found at the specified location",
-            content = @Content(),
-            headers = @Header(
-                    name = "Location",
-                    description = "The actual URL where the asset can be accessed",
-                    schema = @Schema(type = "string")
-            )
+        responseCode = "302",
+        description = "The asset is found at the specified location",
+        content = @Content(),
+        headers = @Header(
+            name = "Location",
+            description = "The actual URL where the asset can be accessed",
+            schema = @Schema(type = "string")
+        )
     )
     @ApiResponse(
-            responseCode = "400",
-            description = "The namespace name is the built-in extension namespace",
-            content = @Content()
+        responseCode = "400",
+        description = "The namespace name is the built-in extension namespace",
+        content = @Content()
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified asset could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified asset could not be found",
+        content = @Content()
     )
     public ResponseEntity<StreamingResponseBody> getAsset(
             HttpServletRequest request,
-            @PathVariable @Parameter(description = "Extension namespace", example = "vitest") String namespaceName,
-            @PathVariable @Parameter(description = "Extension name", example = "explorer") String extensionName,
-            @PathVariable @Parameter(description = "Extension version", example = "1.6.6") String version,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "vitest") String namespaceName,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "explorer") String extensionName,
+            @PathVariable
+            @Parameter(description = "Extension version", example = "1.6.6") String version,
             @PathVariable
             @Parameter(
-                    description = "Asset type",
-                    example = FILE_VSIX,
-                    schema = @Schema(type = "string", allowableValues = {
-                            FILE_ICON, FILE_DETAILS, FILE_CHANGELOG, FILE_MANIFEST, FILE_VSIX, FILE_LICENSE,
-                            FILE_WEB_RESOURCES, FILE_VSIXMANIFEST, FILE_SIGNATURE, FILE_PUBLIC_KEY
-                    })
-            )
-            String assetType,
+                description = "Asset type",
+                example = FILE_VSIX,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        FILE_ICON,
+                        FILE_DETAILS,
+                        FILE_CHANGELOG,
+                        FILE_MANIFEST,
+                        FILE_VSIX,
+                        FILE_LICENSE,
+                        FILE_WEB_RESOURCES,
+                        FILE_VSIXMANIFEST,
+                        FILE_SIGNATURE,
+                        FILE_PUBLIC_KEY
+                    }
+                )
+            ) String assetType,
             @RequestParam(defaultValue = TargetPlatform.NAME_UNIVERSAL)
-            @Parameter(
-                    description = "Target platform",
-                    example = TargetPlatform.NAME_LINUX_X64,
-                    schema = @Schema(type = "string", allowableValues = {
-                            NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                            NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                            NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                            NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                            NAME_WEB, NAME_UNIVERSAL
-                    })
+            @Pattern(
+                regexp = TargetPlatform.NAMES_PARAM_REGEX,
+                message = "parameter must be a supported target platform"
             )
-            String targetPlatform
+            @Parameter(
+                description = "Target platform",
+                example = TargetPlatform.NAME_LINUX_X64,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform
     ) {
         var restOfTheUrl = UrlUtil.extractWildcardPath(request);
         try {
             for (var service : getVSCodeServices()) {
                 try {
-                    return service.getAsset(namespaceName, extensionName, version, assetType, targetPlatform, restOfTheUrl);
+                    return service
+                            .getAsset(namespaceName, extensionName, version, assetType, targetPlatform, restOfTheUrl);
                 } catch (NotFoundException exc) {
                     // Try the next registry
                 }
@@ -216,33 +273,34 @@ public class VSCodeAPI {
     @CrossOrigin
     @Operation(summary = "Access an extension item")
     @ApiResponse(
-            responseCode = "302",
-            description = "The item is found at the specified location",
-            content = @Content(),
-            headers = @Header(
-                    name = "Location",
-                    description = "The actual URL where the item can be accessed",
-                    schema = @Schema(type = "string")
-            )
+        responseCode = "302",
+        description = "The item is found at the specified location",
+        content = @Content(),
+        headers = @Header(
+            name = "Location",
+            description = "The actual URL where the item can be accessed",
+            schema = @Schema(type = "string")
+        )
     )
     @ApiResponse(
-            responseCode = "400",
-            description = "The itemName could not be parsed to publisher and extension name",
-            content = @Content()
+        responseCode = "400",
+        description = "The itemName could not be parsed to publisher and extension name",
+        content = @Content()
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified item could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified item could not be found",
+        content = @Content()
     )
     public ResponseEntity<String> getItemUrl(
             @RequestParam
-            @Parameter(description = "Identifier in the format {publisher}.{name}", example = "foo.bar")
-            String itemName
+            @Parameter(description = "Identifier in the format {publisher}.{name}", example = "foo.bar") String itemName
     ) {
         var dotIndex = itemName.indexOf('.');
         if (dotIndex < 0) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Expecting an item of the form `{publisher}.{name}`");
+            throw new ResponseStatusException(
+                    HttpStatus.BAD_REQUEST,
+                    "Expecting an item of the form `{publisher}.{name}`");
         }
 
         var namespace = itemName.substring(0, dotIndex);
@@ -266,42 +324,58 @@ public class VSCodeAPI {
     @CrossOrigin
     @Operation(summary = "Access an extension package")
     @ApiResponse(
-            responseCode = "302",
-            description = "The package is found at the specified location",
-            content = @Content(),
-            headers = @Header(
-                    name = "Location",
-                    description = "The actual URL where the package can be downloaded",
-                    schema = @Schema(type = "string")
-            )
+        responseCode = "302",
+        description = "The package is found at the specified location",
+        content = @Content(),
+        headers = @Header(
+            name = "Location",
+            description = "The actual URL where the package can be downloaded",
+            schema = @Schema(type = "string")
+        )
     )
     @ApiResponse(
-            responseCode = "400",
-            description = "The namespace name is the built-in extension namespace",
-            content = @Content()
+        responseCode = "400",
+        description = "The namespace name is the built-in extension namespace",
+        content = @Content()
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified package could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified package could not be found",
+        content = @Content()
     )
     public ResponseEntity<String> download(
-            @PathVariable @Parameter(description = "Extension namespace", example = "JFrog") String namespaceName,
-            @PathVariable @Parameter(description = "Extension name", example = "jfrog-vscode-extension") String extensionName,
-            @PathVariable @Parameter(description = "Extension version", example = "2.11.7") String version,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "JFrog") String namespaceName,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "jfrog-vscode-extension") String extensionName,
+            @PathVariable
+            @Parameter(description = "Extension version", example = "2.11.7") String version,
             @RequestParam(defaultValue = TargetPlatform.NAME_UNIVERSAL)
-            @Parameter(
-                    description = "Target platform",
-                    example = TargetPlatform.NAME_LINUX_X64,
-                    schema = @Schema(type = "string", allowableValues = {
-                            NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                            NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                            NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                            NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                            NAME_WEB, NAME_UNIVERSAL
-                    })
+            @Pattern(
+                regexp = TargetPlatform.NAMES_PARAM_REGEX,
+                message = "parameter must be a supported target platform"
             )
-            String targetPlatform
+            @Parameter(
+                description = "Target platform",
+                example = TargetPlatform.NAME_LINUX_X64,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform
     ) {
         for (var service : getVSCodeServices()) {
             try {
@@ -323,74 +397,141 @@ public class VSCodeAPI {
     @CrossOrigin
     @Operation(summary = "Browse an extension package")
     @ApiResponse(
-            responseCode = "200",
-            description = "The file content is returned in binary format or a list of file URLs is returned in JSON format in case the path is a directory",
-            content = {@Content(
-                    mediaType = MediaType.APPLICATION_JSON_VALUE,
-                    examples = @ExampleObject(value = "[\"https://open-vsx.org/vscode/unpkg/redhat/java/0.65.0/extension\", \"https://open-vsx.org/vscode/unpkg/redhat/java/0.65.0/extension.vsixmanifest\"]")
-            ), @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE)}
+        responseCode = "200",
+        description = "The file content is returned in binary format or a list of file URLs is returned in JSON format in case the path is a directory",
+        content = {
+            @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                examples = @ExampleObject(
+                    value = "[\"https://open-vsx.org/vscode/unpkg/redhat/java/0.65.0/extension\", \"https://open-vsx.org/vscode/unpkg/redhat/java/0.65.0/extension.vsixmanifest\"]"
+                )
+            ),
+            @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE)
+        }
     )
     @ApiResponse(
-            responseCode = "302",
-            description = "The file is found at the specified location",
-            content = @Content(),
-            headers = @Header(
-                    name = "Location",
-                    description = "The actual URL where the file can be accessed",
-                    schema = @Schema(type = "string")
-            )
+        responseCode = "302",
+        description = "The file is found at the specified location",
+        content = @Content(),
+        headers = @Header(
+            name = "Location",
+            description = "The actual URL where the file can be accessed",
+            schema = @Schema(type = "string")
+        )
     )
     @ApiResponse(
-            responseCode = "400",
-            description = "The namespace name is the built-in extension namespace",
-            content = @Content()
+        responseCode = "400",
+        description = "The namespace name is the built-in extension namespace, or the target parameter is not a supported target platform",
+        content = @Content()
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified file or directory could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified file or directory could not be found",
+        content = @Content()
     )
     public ResponseEntity<StreamingResponseBody> browse(
             HttpServletRequest request,
-            @PathVariable @Parameter(description = "Extension namespace", example = "malloydata") String namespaceName,
-            @PathVariable @Parameter(description = "Extension name", example = "malloy-vscode") String extensionName,
-            @PathVariable @Parameter(description = "Extension version", example = "0.3.1710435722") String version
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "malloydata") String namespaceName,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "malloy-vscode") String extensionName,
+            @PathVariable
+            @Parameter(description = "Extension version", example = "0.3.1710435722") String version,
+            @RequestParam(required = false)
+            @Pattern(
+                regexp = TargetPlatform.NAMES_PARAM_REGEX,
+                message = "parameter must be a supported target platform"
+            )
+            @Parameter(
+                description = "Target platform. May also be given as a `+<target>` suffix on the version, "
+                        + "which is the form VS Code uses when resolving an extension's resources.",
+                example = TargetPlatform.NAME_WEB,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String target
     ) {
+        var targetPlatform = StringUtils.isNotEmpty(target) ? target : null;
+        var lookupVersion = version;
+        if (targetPlatform == null) {
+            // VS Code appends the target to the version when it resolves an extension's resources, so
+            // that a `web` build and a `universal` build of one version can be told apart.
+            var embeddedTarget = TargetPlatform.targetInVersionSuffix(version);
+            if (embeddedTarget != null) {
+                targetPlatform = embeddedTarget;
+                lookupVersion = version.substring(0, version.length() - embeddedTarget.length() - 1);
+            }
+        }
+
         var path = UrlUtil.extractWildcardPath(request);
         try {
-            for (var service : getVSCodeServices()) {
-                try {
-                    return service.browse(namespaceName, extensionName, version, path);
-                } catch (NotFoundException exc) {
-                    // Try the next registry
-                }
+            var response = browseAcrossServices(namespaceName, extensionName, lookupVersion, targetPlatform, path);
+            if (response == null && !lookupVersion.equals(version)) {
+                // The suffix can also be semver build metadata that happens to name a platform, e.g. a
+                // universal build published as `1.2.3+web`: only once the split reading comes up empty,
+                // fall back to the version exactly as given.
+                response = browseAcrossServices(namespaceName, extensionName, version, null, path);
             }
 
-            return ResponseEntity.notFound().build();
+            return response != null ? response : ResponseEntity.notFound().build();
         } catch (ErrorResultException ex) {
             logger.error(ex.getMessage());
             return ResponseEntity.internalServerError().build();
         }
     }
 
+    private ResponseEntity<StreamingResponseBody> browseAcrossServices(
+            String namespaceName,
+            String extensionName,
+            String version,
+            String targetPlatform,
+            String path
+    ) {
+        for (var service : getVSCodeServices()) {
+            try {
+                return service.browse(namespaceName, extensionName, version, targetPlatform, path);
+            } catch (NotFoundException exc) {
+                // Try the next registry
+            }
+        }
+
+        return null;
+    }
+
     @GetMapping(
-            path = "/vscode/gallery/{namespaceName}/{extensionName}/latest",
-            produces = MediaType.APPLICATION_JSON_VALUE
+        path = "/vscode/gallery/{namespaceName}/{extensionName}/latest",
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
     @Operation(summary = "Provides metadata of the extension matching the given parameters")
     @ApiResponse(
-            responseCode = "200",
-            description = "Returns the extension metadata"
+        responseCode = "200",
+        description = "Returns the extension metadata"
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified extension could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified extension could not be found",
+        content = @Content()
     )
     public ResponseEntity<ExtensionQueryResult.Extension> getLatest(
-            @PathVariable @Parameter(description = "Extension namespace", example = "malloydata") String namespaceName,
-            @PathVariable @Parameter(description = "Extension name", example = "malloy-vscode") String extensionName
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "malloydata") String namespaceName,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "malloy-vscode") String extensionName
     ) {
         try {
             for (var service : getVSCodeServices()) {

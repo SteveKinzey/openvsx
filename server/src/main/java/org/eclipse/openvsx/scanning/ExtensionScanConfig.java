@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,10 +6,10 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
 
 import jakarta.annotation.PostConstruct;
@@ -47,7 +47,7 @@ public class ExtensionScanConfig {
     /**
      * Maximum total size of the uncompressed archive in bytes.
      * This limit is shared by all scanning checks (secret detection, blocklist, etc.).
-     * 
+     *
      * Property: {@code ovsx.scanning.max-archive-size-bytes}
      * Default: {@code 536870912} (512 MB)
      */
@@ -58,7 +58,7 @@ public class ExtensionScanConfig {
      * Maximum size of a single file to process in bytes.
      * Files larger than this are skipped by scanning checks.
      * This limit is shared by all scanning checks.
-     * 
+     *
      * Property: {@code ovsx.scanning.max-single-file-bytes}
      * Default: {@code 268435456} (256 MB)
      */
@@ -68,7 +68,7 @@ public class ExtensionScanConfig {
     /**
      * Maximum number of zip entries to inspect in an archive.
      * This limit is shared by all scanning checks.
-     * 
+     *
      * Property: {@code ovsx.scanning.max-entry-count}
      * Default: {@code 50000}
      */
@@ -110,17 +110,17 @@ public class ExtensionScanConfig {
     public void validate() {
         if (maxArchiveSizeBytes <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.scanning.max-archive-size-bytes must be positive, got: " + maxArchiveSizeBytes);
+                    "ovsx.scanning.max-archive-size-bytes must be positive, got: " + maxArchiveSizeBytes);
         }
 
         if (maxSingleFileBytes <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.scanning.max-single-file-bytes must be positive, got: " + maxSingleFileBytes);
+                    "ovsx.scanning.max-single-file-bytes must be positive, got: " + maxSingleFileBytes);
         }
 
         if (maxEntryCount <= 0) {
             throw new IllegalArgumentException(
-                "ovsx.scanning.max-entry-count must be positive, got: " + maxEntryCount);
+                    "ovsx.scanning.max-entry-count must be positive, got: " + maxEntryCount);
         }
     }
 }

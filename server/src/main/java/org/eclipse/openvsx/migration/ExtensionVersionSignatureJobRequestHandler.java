@@ -1,21 +1,20 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2023 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.migration;
 
-import org.eclipse.openvsx.cache.CacheService;
-import org.eclipse.openvsx.entities.FileResource;
-import org.eclipse.openvsx.entities.SignatureKeyPair;
-import org.eclipse.openvsx.publish.ExtensionVersionIntegrityService;
-import org.eclipse.openvsx.repositories.RepositoryService;
-import org.eclipse.openvsx.util.NamingUtil;
-import org.eclipse.openvsx.util.TempFile;
+import java.io.IOException;
+import java.nio.file.Files;
+
 import org.jobrunr.jobs.annotations.Job;
 import org.jobrunr.jobs.context.JobRunrDashboardLogger;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
@@ -24,14 +23,20 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.nio.file.Files;
+import org.eclipse.openvsx.cache.CacheService;
+import org.eclipse.openvsx.entities.FileResource;
+import org.eclipse.openvsx.entities.SignatureKeyPair;
+import org.eclipse.openvsx.publish.ExtensionVersionIntegrityService;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.util.NamingUtil;
+import org.eclipse.openvsx.util.TempFile;
 
 @Component
 @ConditionalOnProperty(value = "ovsx.data.mirror.enabled", havingValue = "false", matchIfMissing = true)
-public class ExtensionVersionSignatureJobRequestHandler implements JobRequestHandler<MigrationJobRequest> {
+public class ExtensionVersionSignatureJobRequestHandler implements JobRequestHandler<MigrationJobRequest<?>> {
 
-    protected final Logger logger = new JobRunrDashboardLogger(LoggerFactory.getLogger(ExtensionVersionSignatureJobRequestHandler.class));
+    protected final Logger logger = new JobRunrDashboardLogger(
+            LoggerFactory.getLogger(ExtensionVersionSignatureJobRequestHandler.class));
 
     private final RepositoryService repositories;
     private final CacheService cache;
@@ -54,12 +59,12 @@ public class ExtensionVersionSignatureJobRequestHandler implements JobRequestHan
     @Job(name = "Generate signature for extension version", retries = 3)
     public void run(MigrationJobRequest jobRequest) throws IOException {
         var extVersion = migrations.getExtension(jobRequest.getEntityId());
-        if(extVersion == null) {
+        if (extVersion == null) {
             return;
         }
 
         var download = migrations.getDownload(extVersion);
-        if(download == null) {
+        if (download == null) {
             return;
         }
 
@@ -92,8 +97,8 @@ public class ExtensionVersionSignatureJobRequestHandler implements JobRequestHan
     }
 
     private TempFile createSignature(FileResource download, SignatureKeyPair keyPair) throws IOException {
-        try(var extensionFile = migrations.getExtensionFile(download)) {
-            if(Files.size(extensionFile.getPath()) == 0) {
+        try (var extensionFile = migrations.getExtensionFile(download)) {
+            if (Files.size(extensionFile.getPath()) == 0) {
                 return null;
             }
 

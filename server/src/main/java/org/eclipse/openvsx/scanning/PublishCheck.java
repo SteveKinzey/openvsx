@@ -1,25 +1,26 @@
-/********************************************************************************
- * Copyright (c) 2026 Contributors to the Eclipse Foundation 
+/******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
- * See the NOTICE file(s) distributed with this work for additional 
+ * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
- * This program and the accompanying materials are made available under the 
+ * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
- * SPDX-License-Identifier: EPL-2.0 
- ********************************************************************************/
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
+
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import org.jspecify.annotations.NonNull;
 
 import org.eclipse.openvsx.entities.ExtensionScan;
 import org.eclipse.openvsx.entities.UserData;
 import org.eclipse.openvsx.util.TempFile;
-
-import jakarta.annotation.Nonnull;
-import java.util.List;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
 
 /**
  * Interface for checks that run during extension publishing.
@@ -75,17 +76,17 @@ public interface PublishCheck {
         if (failures.isEmpty()) {
             return getCheckType() + " check failed";
         }
-        
+
         int maxToShow = Math.min(3, failures.size());
         var reasons = failures.stream()
                 .limit(maxToShow)
                 .map(Failure::reason)
                 .collect(Collectors.joining(", "));
-        
+
         if (failures.size() > maxToShow) {
             reasons += " ... and " + (failures.size() - maxToShow) + " more";
         }
-        
+
         return reasons;
     }
 
@@ -97,17 +98,17 @@ public interface PublishCheck {
      * etc. to access extension metadata.
      */
     record Context(
-        @Nonnull ExtensionScan scan,
-        @Nonnull TempFile extensionFile,
-        @Nonnull UserData user
+            @NonNull ExtensionScan scan,
+            @NonNull TempFile extensionFile,
+            @NonNull UserData user
     ) {}
 
     /**
      * Result of a publishing check execution.
      */
     record Result(
-        boolean passed,
-        List<Failure> failures
+            boolean passed,
+            List<Failure> failures
     ) {
         public static Result pass() {
             return new Result(true, List.of());
@@ -122,7 +123,9 @@ public interface PublishCheck {
         }
 
         public Result and(Result other) {
-            if (this.passed && other.passed) return pass();
+            if (this.passed && other.passed) {
+                return pass();
+            }
             return fail(Stream.concat(this.failures().stream(), other.failures().stream()).toList());
         }
     }
@@ -131,7 +134,7 @@ public interface PublishCheck {
      * A single check failure with details for recording.
      */
     record Failure(
-        String ruleName,
-        String reason
+            String ruleName,
+            String reason
     ) {}
 }

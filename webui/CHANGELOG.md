@@ -4,25 +4,284 @@ This change log covers only the frontend library (webui) of Open VSX.
 
 ## [next] (unreleased)
 
+### Added
+
+- Add an Install menu next to Download on extension detail pages that opens the extension in Antigravity, Cursor, Kiro, Positron, VS Code Insiders, VSCodium or Windsurf, listed alphabetically (#363)
+
+### Fixed
+
+- An extension URL with a target platform, `/extension/<namespace>/<name>/<platform>/...`, redirects to the same URL without the platform instead of showing "Extension Not Found" (#2433)
+
+### Removed
+
+- **Breaking:** `ExtensionDetailRoutes.MAIN_TARGET`, `LATEST_TARGET`, `PRE_RELEASE_TARGET`, `REVIEWS_TARGET`, `CHANGES_TARGET` and `Parameters.TARGET`, whose regex parameter never matched under React Router v6 (#2433)
+
+## [1.4.0] - 2026-11-09
+
+### Added
+
+- `PageSettings.elements.errorHelp` adds a deployment's help below the message of the error dialog, given the error code and message, such as a link for the code of a login provider it adds ([#2369](https://github.com/eclipse-openvsx/openvsx/issues/2369))
+- `useReportedQuery` requires an `action` that titles the error dialog with what failed, e.g. "Couldn’t load the namespace members", and an `ignore` predicate for the errors a page renders itself, e.g. `isNotFound` for a 404 shown as a not-found state; `MainContext.handleError` takes the dialog `title` directly
+- Curated home rows are regions labelled with their title and set `aria-busy` while they load, so assistive technology can tell a loading row from a loaded one
+- `PageSettings.elements.userSettingsTabs` lets a deployment contribute user-settings tabs
+- The index exports `handleError`, `NO_CACHE`, `DelayedLoadIndicator`, `Timestamp`, `AddUserDialog`, `GenerateTokenDialog`, `SearchListContainer`, `createMultiSelectFilterOperators`, `createArrayContainsFilterOperators`, `SettingsHeader` and `EmptyPlaceholder`, for pages contributed through `adminPages` and `userSettingsTabs`
+- Filter users on the Access Control page by granted permission and show each user's permissions as chips in the results; `useAdminUserSearch` takes an optional `permission` ([#2399](https://github.com/eclipse-openvsx/openvsx/issues/2399))
+- Registering a trusted publisher for a private repository shows its single-use registration code once and marks the registration as pending in the list until the first publish completes it ([#2350](https://github.com/eclipse-openvsx/openvsx/issues/2350))
+
+### Changed
+
+- The error dialog no longer has help for the `eclipse-missing-github-id` and `eclipse-mismatch-github-id` login errors, and a failed publisher agreement points to `pageSettings.publisherAgreement.email`, or to the registry's administrators without one, instead of `webmaster@eclipse.org`; the error message itself is still shown ([#2369](https://github.com/eclipse-openvsx/openvsx/issues/2369))
+- The publisher agreement panel and the admin revoke dialog take the login they require from the new `publisherAgreement.loginProvider` and `loginProviderName` (display label) fields of `UserData` instead of assuming Eclipse; without it no extra login is asked for; their login links return to the page they were on
+- The publisher agreement panel shows a `revoked` status without a sign action, a different message for an `outdated` one, and admins can reinstate a revoked agreement
+- `MainContext` keeps its value, `handleError` and `updateUser` stable across renders, so consumers can depend on them in effects and skip needless re-renders
+- The default publisher agreement text URL is now the server's `/api/publisher-agreement`, instead of `/documents/publisher-agreement.md`
+- `sendRequest` rejects a 200 carrying an error result and no longer retries; retries belong to the query client, which waits out a 429 for queries and never retries a mutation.
+- `ExtensionRegistryService` query methods take an `AbortSignal` instead of an `AbortController` and write methods take neither; no method resolves an `ErrorResult` any more but rejects with it, as `getUser` does when nobody is logged in.
+- The error dialog is titled with what failed, e.g. "Couldn’t load the namespace members", instead of a bare "Error"
+- A curated row on the home page that fails to load shows "We couldn’t load extensions at this time." with a Retry button instead of disappearing; `CuratedRow` carries the row's `error` and a `refetch` for custom home pages
+- `AdminPermission` is a string, `ADMIN_PERMISSIONS` names the built-in ones, and the Access Control page lists permissions from the server, so a deployment can register its own
+- **Breaking:** `AppProviders` no longer mounts the `QueryClientProvider` or takes a `queryClient`; `Main` mounts it above everything else, so a page that mounts `AppProviders` without `Main` wraps it in its own `QueryClientProvider`
+
+### Fixed
+
+- A query reported through `useReportedQuery` (or a page's own error effect) no longer reopens the error dialog in a loop that cannot be closed while the query stays failed (#2348)
+- A failed review post or removal, token revocation or user search no longer leaves its spinner running
+- An expired session no longer leaves the UI logged in and failing every request until the page is reloaded: a 401 the registry confirms is the end of the session logs the user out and asks them to log in again, back to the page they were on, which needs a registry that answers 401 when nobody is logged in; any other 401 is reported as an error
+- The extension details show no latest version, instead of a removed one, for an extension the registry no longer serves ([#2409](https://github.com/eclipse-openvsx/openvsx/issues/2409))
+
+### Removed
+
+- `sendNonRetriableRequest`, `controllerFromSignal` and the `abortController` field of `ServerAPIRequest`: use `sendRequest` with `signal`, and pass a `queryFn`'s `signal` straight to the service
+- The Rate Limiting admin pages (tiers, customers, usage stats), the user-settings Rate Limiting tab, the `manage_rate_limits` permission and the tier, customer, usage and rate limit token methods and types of `ExtensionRegistryService`: a deployment adds such pages through `PageSettings.elements.adminPages` and `userSettingsTabs`
+
+### Dependencies
+
+- Bump vite from 8.3.2 to 8.3.5 (#2357)
+- Bump markdown-it from 14.3.2 to 14.3.3 (#2358)
+- Bump undici from 8.11.2 to 8.12.3 (#2362)
+- Remove `fetch-retry`; the query client owns retries
+- Bump dompurify from 3.4.16 to 3.4.17 (#2379)
+- Upgrade `yarn` from 4.9.1 to 4.18.1 and set `npmMinimalAgeGate` to 7 days, so versions published in the last 7 days are not picked for new resolutions (#2393)
+- Bump qs from 6.16.0 to 6.17.1 (#2429)
+
+## [1.3.0] - 2026-10-16
+
+### Added
+
+- Show the download size of each target platform's package next to its name on the extension detail page, from the new `downloadSizes` field of `Extension` ([#367](https://github.com/eclipse-openvsx/openvsx/issues/367))
+- Add an "Errors" tab to the scan admin page, where an admin can activate extension versions whose scan ended in an error that retrying cannot resolve. The Allowed Files and Blocked Files tabs move to positions 5 and 6, and their `tab` URL parameter values are unchanged (#2315)
+- Add fine-grained admin permissions: a user can hold individual admin capabilities instead of the all-or-nothing admin role, and reaches the dashboard with only the pages those capabilities cover (#2269)
+- Add an "Access Control" admin dashboard page, where a user's role and permissions are assigned together and applied on Save; both move here from Publisher admin (#2269)
+- Export `hasPermission` and `hasAnyAdminAccess`, so a deployment with its own menu content can gate an admin entry the way the built-in menu does (#2269)
+- Export `useInView` (with `ViewportObserverContext` to drive it in tests), `useRegistryValue` and `useReportedQuery`, so custom pages can defer work until visible, read server config and report query errors the way the built-in pages do (#2333)
+- A contributed `adminPages` entry can declare the `permission` it needs; without one it stays admin-only, as it was while the whole dashboard required that role (#2269)
+- Add a "Caches" page to the admin dashboard, with per-cache hit/eviction stats and a way to clear one or all without restarting the server (#2203)
+- Add a "Download Analytics" page to the admin dashboard's Maintenance section, showing whether the analytics database is reachable, since when and why not, and how many log files wait for it (#2337)
+- Add a weekly downloads card to the extension detail page, with a hoverable sparkline of the year's weekly totals (#2135)
+- Add a configurable site banner to the admin dashboard's Settings page, with a Markdown message, severity, a live preview of what visitors will see and an opt-out for showing it again to everyone who dismissed it, served from `/api/-/settings` ([#2256](https://github.com/eclipse-openvsx/openvsx/issues/2256))
+- Prompt anonymous visitors to log in on an extension's reviews tab, where "Write a Review" was previously blank (#2148)
+- Add a default max extension size field to the admin dashboard's Settings page, backed by a new `max-extension-size` runtime setting; falls back to the server's configured `ovsx.publishing.max-content-size` until an admin sets it explicitly, and cannot be raised past the server's `ovsx.publishing.max-override-size` ceiling ([#2129](https://github.com/eclipse-openvsx/openvsx/issues/2129))
+- Add a "Size overrides" page to the admin dashboard for managing per-namespace and per-extension upload size limits, each capped at the same `ovsx.publishing.max-override-size` ceiling ([#2129](https://github.com/eclipse-openvsx/openvsx/issues/2129))
+- Add an Analytics section to the admin dashboard's Settings page, where an admin switches the weekly downloads card on extension pages on once the server has download analytics configured (#2340)
+- Let a deployment add switches to the Settings page through `PageSettings.elements.adminSettingsSections` (#2340)
+- Let a personal access token be restricted to a namespace or a single extension, and to publishing only, when it is generated, choosing the namespace from the ones the user is a member of and the extension from its active extensions, and show that in the token list ([#957](https://github.com/eclipse-openvsx/openvsx/issues/957))
+- Export `ListLoadError`, the inline warning with a Retry button the search results show when a page fails to load, for lists in custom pages (#2334)
+
+### Changed
+
+- **Breaking:** `AdminService.updateUserRole` is replaced by `updateUserAccess(provider, login, { role, permissions })`, which writes a user's role and permissions as one state in one request against the new `PUT /admin/user/{provider}/{login}/access` endpoint (#2269)
+- Removing an extension review follows the `manage_extensions` permission rather than the admin role, which admins hold either way (#2269)
+- Return to the page a login started from, instead of always landing on the front page (#2148)
+- Load an extension's icon only when it comes near the viewport, instead of every icon on the page at once (#2213)
+- Group the admin dashboard's sidebar into Content, Search, Maintenance, Administration, Rate Limiting, and Analytics sections instead of one flat list. The first section starts expanded, as does whichever section holds the current page, whether opened directly or navigated to ([#2278](https://github.com/eclipse-openvsx/openvsx/issues/2278))
+- Redesign the 404 page to match the new web UI, with a search field prefilled with the last segment of the requested path (#2299)
+- **Breaking:** rename `useRegisterPageSearchBar` to `useSearchBar(ref)` (the ref is now required), which also takes `/` focus requests and gives focus back to the nav field when the bar leaves view (#2299)
+
+### Fixed
+
+- Stop search results from re-requesting a page that failed to load in a loop, reopening the error dialog each time; a failed page, the first one included, now shows an inline notice with a Retry button instead of the dialog (#2334)
+- Fix `sendNonRetriableRequest` and `sendStrictRequest` still retrying network errors and aborted requests three times (#2237)
+- The publish page no longer refuses a package larger than the registry's default limit without asking the server. A namespace with a size override may publish more than the default allows, so the upload is now only blocked above the registry's ceiling — the largest any namespace could publish. A package that looks too big is shown in the queue while that ceiling is re-read, rather than the page staying empty until the answer arrives ([#2129](https://github.com/eclipse-openvsx/openvsx/issues/2129))
+- The admin dashboard's Settings page sends only the settings that were changed, so saving no longer reverts a setting another admin changed while the page was open ([#2129](https://github.com/eclipse-openvsx/openvsx/issues/2129))
+- The namespace details form no longer enables Save after a social handle is typed and then cleared, and now enables it when only the LinkedIn account type changes (#2314)
+
+### Removed
+
+- **Breaking:** stop exporting `SearchActionContext`, `filterFromParams`, `filterToParams`, `SEARCH_DEBOUNCE_MS` and `ExtensionHeaderInfo`, internals the package root exposed by accident; `useSearch` reads and applies the search filter (#2333)
+
+### Dependencies
+
+- Bump vitest from 4.1.11 to 5.0.3 (#2291)
+- Bump vite from 8.2.1 to 8.3.2 (#2292)
+- Bump ip-address from 10.4.0 to 10.7.2 (#2262)
+- Bump undici from 8.9.0 to 8.11.2 (#2270)
+- Bump markdown-it from 14.2.0 to 14.3.2 (#2272)
+- Bump brace-expansion from 1.1.18 to 1.1.21, 2.1.7, 5.0.12
+- Bump dompurify from 3.4.13 to 3.4.16 (#2280)
+- Bump fast-uri from 3.1.7 to 3.1.8 (#2273)
+- Pin the transitive `node-gyp` resolution to `^13.1.0` (from 12.2.0), which `fsevents`' optional dependency had resolved to `latest` (#2293)
+- Bump source-map-js from 1.2.1 to 1.2.2 (#2311)
+- Bump proxy-addr from 2.0.7 to 2.0.8 (#2312)
+- Remove `lodash` and `@types/lodash` (#2314)
+- Remove `clipboard-copy` in favor of the built-in `navigator.clipboard.writeText` (#2318)
+- Remove `react-infinite-scroller` and `@types/react-infinite-scroller`; search results load the next page through an `IntersectionObserver` sentinel instead of a window scroll listener (#2321)
+
+## [v1.2.0] - 2026-09-10
+
+### Added
+
+- Add a `/publish` page and turn the navbar's Publish button into a drop target: a file drag anywhere in the app turns the button into a drop area, and every `.vsix` package dropped on it — or on the publish page's own drop area — is queued and uploaded straight away, with no confirmation dialog. The page shows the queue as a line of extension cards — a skeleton while a package uploads, the real card once the registry accepts it, labelled with whatever the registry did with it — and keeps polling anything left under review or still missing its icon
+- Export `PublishButton`, which carries the publish link, its `p` shortcut and the app's `.vsix` drop target in one component, so a deployment with its own menu content keeps drag-and-drop publishing
+- Add a "Data Consistency" page to the admin dashboard (#1622): a live overview of every registered consistency check's finding count, with actions to refresh it and to fix findings one at a time or all at once
+- Show a "Namespace not verified" state on an extension card when it can't be activated because its namespace already exists in a referenced external gallery and hasn't been verified, in both the "My Extensions" and namespace member extension lists. The card keeps its colour and takes a warning-toned frame and icon, since this is the publisher's to fix rather than an extension that is simply switched off
+- Show a warning notice with a claim action wherever an unverified namespace is holding something back — the extension settings page when the extension has a namespace ownership conflict, and the namespace settings page for any unverified namespace — making clear the namespace must be claimed (verified) first. The action is the deployment's configured `elements.claimNamespace`, falling back to the namespace access documentation when none is configured. The admin dashboard's extension and namespace views show the same explanation without the claim action, since claiming is the publisher's action to take, not an admin's on someone else's behalf
+- Add a "Search Index" page to the admin dashboard: which engine answers searches, how many extensions the index holds against how many it is built from, and a button to rebuild it where there is an index to rebuild. The two counts sit side by side because an index that has quietly lost entries answers searches perfectly well, just with nothing in them, which is indistinguishable from an empty registry unless both numbers are visible at once
+- Mark a version that was published through a trusted publishing workflow with an icon next to "Published by" on the extension detail page, linking to the deployment's trusted publishing documentation. The default deployment points that link at the [Trusted Publishing](https://github.com/eclipse-openvsx/openvsx/wiki/Trusted-Publishing) wiki page
+- Add a `Pill` component — the clickable glass pill the category pills are built on, now usable on its own — and extract the `MonoSlash`, `glassSurface` and `compactControl` page primitives out of the search field, the pills and the search header
+- Add `userLoading` to `MainContext`, so custom pages can tell "not logged in" from "still resolving the user"
+- Add a `userMenuContent` slot to `PageSettings.elements`: extra entries for the logged-in account menu, rendered above the admin entry. The slot receives a `MenuEntry` component to build entries with, so each entry is styled by the menu it appears in — the desktop and mobile menus style theirs differently, and a consumer cannot match both on its own
+- Add an `adminPages` slot to `PageSettings.elements`: extra admin dashboard pages, each declaring a name, icon, optional description and optional category, and each appearing in the side panel, as a card on the dashboard overview and as a route. Contributions are additive — a category name matching a built-in group appends to it, and a page whose path would shadow a built-in one is ignored
+- Widen the published API for consumers building their own pages: the request layer (`sendRequest`, `sendNonRetriableRequest`, `ErrorResponse`, `controllerFromSignal`), `MainContext`, `AppProviders`, `NotFound`, `createDefaultTheme` with the `MONO_FONT`/`NAVBAR_HEIGHT` tokens, the `createRoute`/`createAbsoluteURL`/`addQuery`/`formatCompactNumber`/`toRelativeTime` utils, the `useDebouncedCallback` and `useGridCursor` hooks, the navbar-chrome, search-focus and page-search-bar hooks, the category icon helpers, `ExtensionDetailRoutes`, and the `itemIcon`/`MenuItemText` building blocks for `userMenuContent` entries
+
+### Changed
+
+- Redesign the user settings: a sidebar (a pill strip below `md`) navigating profile, access tokens, trusted publishers, extensions and rate limiting, with the user's namespaces listed alongside it and each one deep-linkable at `/user-settings/namespaces/:namespace`. Every view is rebuilt on the cards, grids, placeholders and theme shape tokens the rest of the site uses, and the namespace detail is now a single component shared with the admin dashboard
+- Revoking a single access token asks for confirmation first, like every other destructive action
+- Present the unsigned publisher agreement on the access tokens page as a warning notice with a link to sign it, instead of a plain paragraph
+- Mark a removed extension version in red across its row — version number, status pill and timeline dot — and disable its delete action. Every version of a rejected extension is marked too, and "Latest" is reserved for extensions the registry actually serves, so one that is inactive or removed has no version marked latest
+- Publish from the navbar's Publish button, the `p` shortcut and the settings Extensions tab through the new publish page, replacing the one-file-at-a-time publish dialog
+- Add an `outlinedWarning` style to `MuiButton`, so a warning-toned outlined button follows the theme like the secondary and error ones instead of MUI's default half-opacity border
+- **Breaking:** `elements.claimNamespace` now receives `{ namespace, extension?, sx? }` instead of `{ extension, sx? }`. The namespace settings page offers the same claim action and has no extension to pass, so implementations must read the namespace from `namespace` rather than `extension.namespace`
+- Publishing goes through TanStack Query: `publishExtension` and `createNamespace` are mutation hooks (`usePublishExtension`, `useCreateNamespace`), and both service methods lose their `AbortController` parameter — writes are no longer aborted, and retries are the query client's to own. The user's extension list is a query too (`useUserExtensions`), read by the settings tab and by the publish queue as it follows a package, so a card appears in the list as soon as the registry has the package
+- `ExtensionCard` accepts an `Extension` as well as a `SearchEntry`, and takes optional `to`, `linkState`, `overlay`, `footerStart`, `dimmed`, `tone` and `iconPending` props so other surfaces can reuse it instead of copying it
+- Show an extension card's rating as one star and the score rather than five stars, and no rating at all on an extension nobody has reviewed. Five icons could not shrink, so beside a long download count the count spilled out of the card
+- Rename `ScrollToTop` to `ScrollRestoration`, matching what it does on back/forward navigation
+- Rename the extension tint context to `navbar-chrome-context` and add a second channel to it: a page with sections pinned under the navbar can extend the navbar's blur fan down to back them (`useExtendNavbarBlur`)
+- Give Popover and Autocomplete popups the same floating-paper treatment as the other menus, and stop Popovers locking body scroll — the lock jumps the scroll position on mobile and shifts the pinned chrome
+
+### Fixed
+
+- Fix a React warning ("Received `true` for a non-boolean attribute `notched`") from the admin dashboard's publisher role filter, whose custom `InputBase` doesn't consume the `notched` prop MUI's `Select` injects for the (unused) outlined variant
+- Fix the admin dashboard Scan tab getting stuck on the loading spinner after switching tabs, even though the new tab's data had already loaded successfully
+- Fix the page jumping to the top whenever a menu, select or dialog opens.
+- Fix the extension detail page's download menu so each target-platform option is clickable across its whole row, not just its text: the option was an inline link nested inside a non-interactive menu item, rather than the menu item itself being the link
+- Fix `sendRequest` re-enabling fetch-retry's own retries for the request that follows a 429 wait, because the recursive call didn't forward the original `retry` flag. A `sendStrictRequest`/`sendNonRetriableRequest` call that hit a 429 could end up having its follow-up request retried twice - once by fetch-retry and once by the query client
+- Fix the create-namespace dialog acting on Enter when its button is disabled: an empty or over-long name was submitted anyway, and a held key sent the request more than once
+- Fix `isError` counting an empty `error` string as an error, and make it and `isSuccess` answer a `null` response body instead of throwing on it (`typeof null === 'object'`). The registry aggregates per-version outcomes when deleting extension versions, so a delete where every version succeeded answered with an empty error next to the success message - which raised an error dialog with nothing in it
+
+### Dependencies
+
+- Remove the `react-dropzone` dependency; the publish page and the navbar's drop target handle their own drag events, and nothing else imports it
+- Remove nine dependencies that nothing imports: `clsx`, `prop-types` and `punycode` from the runtime dependencies, and `@types/d3-scale`, `@types/d3-shape`, `@types/prop-types`, `@types/punycode`, `@types/react-transition-group` and `ts-node` from the development ones. All but `@types/punycode` and `ts-node` stay in the tree through MUI or the URL parsers that actually use them, so only those two leave the install
+- Bump express from `4.22.1` to `5.2.1` and `@types/express` from `4.17` to `5.0`. Express 4 caps `qs` at `~6.14.0`, which is why a `qs` resolution was needed to move past it; Express 5 declares `^6.14.0`, so that resolution is gone and `qs` resolves to `6.16.0` on its own. The standalone frontend server's catch-all route is now `/{*splat}`, which is how Express 5 spells the `*` it no longer accepts
+- Bump @humanfs/node from 0.16.6 to 0.16.8
+- Bump js-yaml from 4.3.1 to 4.3.2
+
+## [v1.1.2] - 2026-08-20
+
+### Added
+
+- Add a "Forget user" action to the admin dashboard's publisher details, calling the GDPR erasure endpoint
+
+### Fixed
+
+- Fix the extension overview sidebar overlapping the readme content at narrower ("tablet") window widths: there are now only mobile and desktop layouts, with tablet widths using the desktop layout ([#2068](https://github.com/eclipse-openvsx/openvsx/issues/2068))
+
+## [v1.1.1] - 2026-08-09
+
+### Fixed
+
+- Fix the WebUI build failing on s390x and ppc64le: use postcss instead of lightningcss (no ppc64le binary) for CSS, and bump vite for the Rolldown big-endian sourcemap fix ([#2051](https://github.com/eclipse-openvsx/openvsx/issues/2051))
+- Fix the admin publisher revoke dialog prompting for an Eclipse login even when the target publisher's agreement status is `none` or could not be determined (nothing confirmed to revoke)
+
+### Dependencies
+
+- Remove the unused `@mui/base` dependency; it is deprecated upstream (replaced by `@base-ui/react`) and nothing in the codebase imports from it
+- Bump socks from `2.8.3` to `2.8.9`
+- Bump ip-address from `9.0.5` to `10.4.0`
+- Bump postcss from `8.5.22` to `8.5.25`
+- Bump vite from `8.1.5` to `8.2.1`
+- Bump dompurify from `3.4.12` to `3.4.13`
+- Bump js-yaml from `4.3.0` to `4.3.1`
+- Bump react-router from `7.18.1` to `7.18.2`
+
+## [v1.1.0] - 2026-08-02
+
+### Added
+
+- Add a home page with hero search, popular searches, a category browser, curated extension rows and get-involved cards
+- Add a dedicated search page under `/search` with query, category, sort field and sort order synced to the URL
+- Add global keyboard shortcuts
+- Add keyboard navigation of search results: `↑`/`↓`
+- Add a structured footer
+- Add scroll-to-top on forward navigation
+- Support searching users and managing their roles in the admin dashboard ([#1847](https://github.com/eclipse-openvsx/openvsx/pull/1847))
+- Added an extension details page to admin dashboard and user settings ([#1939](https://github.com/eclipse-openvsx/openvsx/pull/1939))
+
+### Changed
+
+- Redesign the web UI: new navbar with integrated search field, new theme, extension cards, category pills and page layout
+- Consolidate the app-wide providers into a single `AppProviders`; keyboard shortcuts and search now wrap every route, including the admin dashboard
+- Improve accessibility: visible focus outlines on interactive controls
+- Morph the hero search into the navbar search field using the View Transitions API
+- Token display in generate-token dialog now uses a masked input with show/hide toggle and copy button ([#1966](https://github.com/eclipse-openvsx/openvsx/pull/1966)
+- Migrate admin dashboard to use `@tanstack/react-query` ([#1917](https://github.com/eclipse-openvsx/openvsx/pull/1917)
+- Replace formatting from `stylistic` with `prettier` ([#1916](https://github.com/eclipse-openvsx/openvsx/pull/1916))
+- Upgrade to vite 8+ and disable manual chunks for bundling ([#1989](https://github.com/eclipse-openvsx/openvsx/pull/1989))
+- Upgrade to react-router 7: import everything from `react-router` instead of `react-router-dom`. Consumers passing `additionalRoutes` must upgrade to react-router 7 as well
+
+### Fixed
+
+- Refresh the extension version list in the delete views when a delete fails with a conflict
+- Keep the hero-to-navbar search morph working under react-router 7, which wraps location updates in `React.startTransition`
+
+### Dependencies
+
+- Bump brace-expansion from `1.1.11` to `1.1.16` ([#1981](https://github.com/eclipse-openvsx/openvsx/pull/1981))
+- Bump brace-expansion from `2.0.2` to `2.1.2` ([#1944](https://github.com/eclipse-openvsx/openvsx/pull/1944))
+- Bump brace-expansion from `5.0.3` to `5.0.7` ([#1944](https://github.com/eclipse-openvsx/openvsx/pull/1944))
+- Bump tar from `7.5.16` to `7.5.22` ([#1994](https://github.com/eclipse-openvsx/openvsx/pull/1994))
+- Bump js-yaml from `4.2.0` to `4.3.0` ([#1976](https://github.com/eclipse-openvsx/openvsx/pull/1976))
+- Bump dompurify from `3.4.11` to `3.4.12` ([#1984](https://github.com/eclipse-openvsx/openvsx/pull/1984))
+- Bump react-router from `6.30.4` to `7.18.1`
+- Remove react-router-dom and its stale `@types/react-router-dom` v5 typings
+
+## [v1.0.2] - 2026-06-23
+
+### Changed
+
+- Migrate unit test framework from mocha to vitest
+
+### Dependencies
+
+- Bump tar from `7.5.11` to `7.5.16` ([#1907](https://github.com/eclipse-openvsx/openvsx/pull/1907))
+- Bump js-yaml from `4.1.1` to `4.2.0` ([#1908](https://github.com/eclipse-openvsx/openvsx/pull/1908))
+- Bump vite from `7.3.2` to `7.3.5` ([#1905](https://github.com/eclipse-openvsx/openvsx/pull/1905))
+- Bump dompurify from `3.4.0` to `3.4.9` ([#1906](https://github.com/eclipse-openvsx/openvsx/pull/1906))
+- Bump markdown-it from `14.1.1` to `14.2.0` ([#1904](https://github.com/eclipse-openvsx/openvsx/pull/1904))
+- Bump @babel/core from `7.29.0` to `7.29.7` ([#1909](https://github.com/eclipse-openvsx/openvsx/pull/1909))
+
+## [v1.0.1] - 2026-06-11
+
 ### Dependencies
 
 - Bump qs from `6.15.1` to `6.15.2` ([#1897](https://github.com/eclipse-openvsx/openvsx/pull/1897))
 - Bump react-router and react-router-dom from `6.30.3` to `6.30.4` ([#1897](https://github.com/eclipse-openvsx/openvsx/pull/1897))
 
-## [v1.0.0] (28/05/2026)
+## [v1.0.0] - 2026-05-28
 
 ### Added
 
 - Add a settings page in the admin dashboard and support putting the registry in read-only mode ([#1835](https://github.com/eclipse-openvsx/openvsx/pull/1835))
 
-## [v0.20.4] (22/05/2026)
+## [v0.20.4] - 2026-05-22
 
 ### Added
 
 - Add support to retry failed scanner jobs in the admin dashboard ([#1832](https://github.com/eclipse-openvsx/openvsx/pull/1832))
 - Display non-terminal scanner jobs in the scan card ([#1836](https://github.com/eclipse-openvsx/openvsx/pull/1836))
 
-## [v0.20.3] (08/05/2026)
+## [v0.20.3] - 2026-05-08
 
 ### Changed
 
@@ -32,7 +291,7 @@ This change log covers only the frontend library (webui) of Open VSX.
 
 - Fix admin dashboard breadcrumbs not being URL-decoded due to #1782 ([#1806](https://github.com/eclipse-openvsx/openvsx/pull/1806))
 
-## [v0.20.2] (28/04/2026)
+## [v0.20.2] - 2026-04-28
 
 ### Added
 
@@ -55,7 +314,7 @@ This change log covers only the frontend library (webui) of Open VSX.
 - Bump react-avatar-editor from `13.0.2` to `15.1.0` ([#1787](https://github.com/eclipse/openvsx/pull/1787))
 - Bump postcss from `8.5.6` to `8.5.10` ([#1793](https://github.com/eclipse/openvsx/pull/1793))
 
-## [v0.20.1] (20/04/2026)
+## [v0.20.1] - 2026-04-20
 
 ### Changed
 
@@ -72,7 +331,7 @@ This change log covers only the frontend library (webui) of Open VSX.
 
 - Bump dompurify from `3.3.2` to `3.4.0` ([#1768](https://github.com/eclipse/openvsx/pull/1768))
 
-## [v0.20.0] (13/04/2026)
+## [v0.20.0] - 2026-04-13
 
 ### Added
 
@@ -85,7 +344,7 @@ This change log covers only the frontend library (webui) of Open VSX.
 
 - Avoid loading extension data multiple times on the extension detail page ([#1756](https://github.com/eclipse/openvsx/pull/1756))
 
-## [v0.19.1] (Apr. 2026)
+## [v0.19.1] - 2026-04-07
 
 ### Fixed
 
@@ -98,7 +357,7 @@ This change log covers only the frontend library (webui) of Open VSX.
 - Bump lodash from `4.17.23` to `4.18.1` ([#1742](https://github.com/eclipse/openvsx/pull/1742))
 - Bump vite from `7.3.1` to `7.3.2` ([#1744](https://github.com/eclipse/openvsx/pull/1744))
 
-## [v0.19.0] (Mar. 2026)
+## [v0.19.0] - 2026-03-25
 
 ### Added
 
@@ -124,7 +383,7 @@ This change log covers only the frontend library (webui) of Open VSX.
 - Bump dompurify from `3.2.4` to `3.3.2` ([#1671](https://github.com/eclipse/openvsx/pull/1671))
 - Bump flatten from `3.3.1` to `3.4.2` ([#1702](https://github.com/eclipse/openvsx/pull/1702))
 
-## [v0.18.0] (Feb. 2026)
+## [v0.18.0] - 2026-02-17
 
 ### Added
 
@@ -146,7 +405,7 @@ This change log covers only the frontend library (webui) of Open VSX.
 - Upgrade `react-router-dom` from `6.23.1` to `6.30.3`
 - Upgrade `@playwright/test` from `1.57.0` to `1.58.0`
 
-## [v0.17.1] (Jan. 2026)
+## [v0.17.1] - 2026-01-06
 
 ### Dependencies
 

@@ -1,21 +1,24 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.search;
 
+import java.util.List;
+import java.util.Objects;
+
+import org.jspecify.annotations.Nullable;
 import org.springframework.data.elasticsearch.annotations.Document;
 import org.springframework.data.elasticsearch.annotations.Field;
 import org.springframework.data.elasticsearch.annotations.FieldType;
-
-import jakarta.annotation.Nullable;
-import java.util.List;
-import java.util.Objects;
 
 @Document(indexName = "extensions")
 public class ExtensionSearch {
@@ -161,8 +164,12 @@ public class ExtensionSearch {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         ExtensionSearch that = (ExtensionSearch) o;
         return id == that.id
                 && Double.compare(that.relevance, relevance) == 0
@@ -182,8 +189,18 @@ public class ExtensionSearch {
     @Override
     public int hashCode() {
         return Objects.hash(
-                id, relevance, name, namespace, extensionId, targetPlatforms, displayName, description, timestamp,
-                rating, downloadCount, categories, tags
-        );
+                id,
+                relevance,
+                name,
+                namespace,
+                extensionId,
+                targetPlatforms,
+                displayName,
+                description,
+                timestamp,
+                rating,
+                downloadCount,
+                categories,
+                tags);
     }
 }

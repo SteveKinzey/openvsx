@@ -7,6 +7,7 @@ package org.eclipse.openvsx.jooq.tables.records;
 import java.time.LocalDateTime;
 
 import org.eclipse.openvsx.jooq.tables.PersonalAccessToken;
+import org.jooq.JSONB;
 import org.jooq.Record1;
 import org.jooq.impl.UpdatableRecordImpl;
 
@@ -145,6 +146,92 @@ public class PersonalAccessTokenRecord extends UpdatableRecordImpl<PersonalAcces
         return (Boolean) get(8);
     }
 
+    /**
+     * Setter for <code>public.personal_access_token.version</code>.
+     */
+    public void setVersion(Short value) {
+        set(9, value);
+    }
+
+    /**
+     * Getter for <code>public.personal_access_token.version</code>.
+     */
+    public Short getVersion() {
+        return (Short) get(9);
+    }
+
+    /**
+     * Setter for <code>public.personal_access_token.type</code>.
+     */
+    public void setType(String value) {
+        set(10, value);
+    }
+
+    /**
+     * Getter for <code>public.personal_access_token.type</code>.
+     */
+    public String getType() {
+        return (String) get(10);
+    }
+
+    /**
+     * Setter for <code>public.personal_access_token.scope_extension_id</code>.
+     */
+    public void setScopeExtensionId(Long value) {
+        set(11, value);
+    }
+
+    /**
+     * Getter for <code>public.personal_access_token.scope_extension_id</code>.
+     */
+    public Long getScopeExtensionId() {
+        return (Long) get(11);
+    }
+
+    /**
+     * Setter for <code>public.personal_access_token.scope_namespace_id</code>.
+     */
+    public void setScopeNamespaceId(Long value) {
+        set(12, value);
+    }
+
+    /**
+     * Getter for <code>public.personal_access_token.scope_namespace_id</code>.
+     */
+    public Long getScopeNamespaceId() {
+        return (Long) get(12);
+    }
+
+    /**
+     * Setter for
+     * <code>public.personal_access_token.trusted_publisher_id</code>.
+     */
+    public void setTrustedPublisherId(Long value) {
+        set(13, value);
+    }
+
+    /**
+     * Getter for
+     * <code>public.personal_access_token.trusted_publisher_id</code>.
+     */
+    public Long getTrustedPublisherId() {
+        return (Long) get(13);
+    }
+
+    /**
+     * Setter for <code>public.personal_access_token.claims</code>.
+     */
+    public void setClaims(JSONB value) {
+        set(14, value);
+    }
+
+    /**
+     * Getter for <code>public.personal_access_token.claims</code>.
+     */
+    public JSONB getClaims() {
+        return (JSONB) get(14);
+    }
+
     // -------------------------------------------------------------------------
     // Primary key information
     // -------------------------------------------------------------------------
@@ -168,7 +255,7 @@ public class PersonalAccessTokenRecord extends UpdatableRecordImpl<PersonalAcces
     /**
      * Create a detached, initialised PersonalAccessTokenRecord
      */
-    public PersonalAccessTokenRecord(Long id, LocalDateTime accessedTimestamp, Boolean active, LocalDateTime createdTimestamp, String description, String value, Long userData, LocalDateTime expiresTimestamp, Boolean notified) {
+    public PersonalAccessTokenRecord(Long id, LocalDateTime accessedTimestamp, Boolean active, LocalDateTime createdTimestamp, String description, String value, Long userData, LocalDateTime expiresTimestamp, Boolean notified, Short version, String type, Long scopeExtensionId, Long scopeNamespaceId, Long trustedPublisherId, JSONB claims) {
         super(PersonalAccessToken.PERSONAL_ACCESS_TOKEN);
 
         setId(id);
@@ -180,6 +267,12 @@ public class PersonalAccessTokenRecord extends UpdatableRecordImpl<PersonalAcces
         setUserData(userData);
         setExpiresTimestamp(expiresTimestamp);
         setNotified(notified);
+        setVersion(version);
+        setType(type);
+        setScopeExtensionId(scopeExtensionId);
+        setScopeNamespaceId(scopeNamespaceId);
+        setTrustedPublisherId(trustedPublisherId);
+        setClaims(claims);
         resetChangedOnNotNull();
     }
 }

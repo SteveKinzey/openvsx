@@ -1,17 +1,20 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2023 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.migration;
 
-import org.eclipse.openvsx.ExtensionProcessor;
-import org.eclipse.openvsx.entities.FileResource;
-import org.eclipse.openvsx.util.NamingUtil;
+import java.io.IOException;
+import java.nio.file.Files;
+
 import org.jobrunr.jobs.annotations.Job;
 import org.jobrunr.jobs.context.JobRunrDashboardLogger;
 import org.jobrunr.jobs.lambdas.JobRequestHandler;
@@ -19,13 +22,15 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
-import java.io.IOException;
-import java.nio.file.Files;
+import org.eclipse.openvsx.ExtensionProcessor;
+import org.eclipse.openvsx.entities.FileResource;
+import org.eclipse.openvsx.util.NamingUtil;
 
 @Component
-public class GenerateSha256ChecksumJobRequestHandler implements JobRequestHandler<MigrationJobRequest> {
+public class GenerateSha256ChecksumJobRequestHandler implements JobRequestHandler<MigrationJobRequest<?>> {
 
-    protected final Logger logger = new JobRunrDashboardLogger(LoggerFactory.getLogger(GenerateSha256ChecksumJobRequestHandler.class));
+    protected final Logger logger = new JobRunrDashboardLogger(
+            LoggerFactory.getLogger(GenerateSha256ChecksumJobRequestHandler.class));
 
     private final MigrationService migrations;
 
@@ -44,13 +49,13 @@ public class GenerateSha256ChecksumJobRequestHandler implements JobRequestHandle
                 .log();
 
         var existingChecksum = migrations.getFileResource(extVersion, FileResource.DOWNLOAD_SHA256);
-        if(existingChecksum != null) {
+        if (existingChecksum != null) {
             migrations.removeFile(existingChecksum);
             migrations.deleteFileResource(existingChecksum);
         }
 
-        try(var extensionFile = migrations.getExtensionFile(download)) {
-            if(Files.size(extensionFile.getPath()) == 0) {
+        try (var extensionFile = migrations.getExtensionFile(download)) {
+            if (Files.size(extensionFile.getPath()) == 0) {
                 return;
             }
             try (

@@ -1,12 +1,15 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
 
 import jakarta.persistence.*;
@@ -48,21 +51,23 @@ public class FileResource {
     @Column(length = 32)
     private String storageType;
 
+    private Long size;
+
     public long getId() {
         return id;
     }
 
     public void setId(long id) {
-		this.id = id;
-	}
+        this.id = id;
+    }
 
-	public ExtensionVersion getExtension() {
-		return extension;
-	}
+    public ExtensionVersion getExtension() {
+        return extension;
+    }
 
-	public void setExtension(ExtensionVersion extension) {
-		this.extension = extension;
-	}
+    public void setExtension(ExtensionVersion extension) {
+        this.extension = extension;
+    }
 
     public String getName() {
         return name;
@@ -86,5 +91,17 @@ public class FileResource {
 
     public void setStorageType(String storageType) {
         this.storageType = storageType;
+    }
+
+    /**
+     * The size of the file in bytes, or {@code null} if it hasn't been determined yet
+     * (e.g. for resources created before this field was introduced, pending backfill).
+     */
+    public Long getSize() {
+        return size;
+    }
+
+    public void setSize(Long size) {
+        this.size = size;
     }
 }

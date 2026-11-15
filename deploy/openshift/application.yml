@@ -12,8 +12,8 @@ spring:
   application:
     name: openvsx-server
   autoconfigure:
-    exclude: 
-     - org.springframework.boot.actuate.autoconfigure.tracing.zipkin.ZipkinAutoConfiguration
+    exclude:
+     - org.springframework.boot.zipkin.autoconfigure.ZipkinAutoConfiguration
   profiles:
     include: ovsx
   cache:
@@ -23,6 +23,13 @@ spring:
     url: jdbc:postgresql://postgresql:5432/openvsx
     username: openvsx
     password: openvsx
+  # Download analytics is disabled by default. When enabled it keeps its time-series schema in a
+  # separate database, migrated on its own and requiring the timescaledb extension:
+  #   ovsx.analytics.enabled: true
+  #   ovsx.analytics.datasource.url: jdbc:postgresql://postgresql-timeseries:5432/openvsx_timeseries
+  #   ovsx.analytics.datasource.username: openvsx
+  #   ovsx.analytics.datasource.password: openvsx
+  #   ovsx.analytics.datasource.maximum-pool-size: 5
   flyway:
     baseline-on-migrate: true
     baseline-version: 0.1.0
@@ -39,8 +46,7 @@ spring:
     jdbc:
       initialize-schema: never
   thymeleaf:
-    # explicitly disable thymeleaf view resolution
-    enabled: false
+    check-template-location: false
 
   security:
       oauth2:
@@ -71,6 +77,9 @@ management:
             requests: true
 
 springdoc:
+  model-and-view-allowed: true
+  api-docs:
+    version: openapi_3_0
   swagger-ui:
     path: /swagger-ui
     docExpansion: list
@@ -78,37 +87,43 @@ springdoc:
     supportedSubmitMethods:
       - get
 
-org:
-  jobrunr:
-    job-scheduler:
-      enabled: true
-    background-job-server:
-      enabled: true
-      worker-count: 2
-    dashboard:
-      enabled: false
-    database:
-      type: sql
-    miscellaneous:
-      allow-anonymous-data-usage: false
+jobrunr:
+  job-scheduler:
+    enabled: true
+  background-job-server:
+    enabled: true
+    worker-count: 2
+  dashboard:
+    enabled: false
+  database:
+    type: sql
+  miscellaneous:
+    allow-anonymous-data-usage: false
 
 bucket4j:
   enabled: false
 
 ovsx:
+  publisher-agreement:
+    # empty disables the agreement; a version such as 1, 1.0 or 1.0.0 requires signing it (a new major version requires re-signing unless allowed-versions says otherwise)
+    version: ''
+    # versions besides the current one whose signatures stay valid, such as '1.1,1.2' (quote a single one such as '1.10', which YAML reads as 1.1); empty accepts the same or a higher major version
+    allowed-versions: ''
+    # Markdown text of the agreement, served at /api/publisher-agreement; a Spring resource location such as file:/etc/openvsx/agreement.md
+    text: ''
   databasesearch:
     enabled: false
   elasticsearch:
     clear-on-start: true
     host: elasticsearch:9200
-  eclipse:
-    base-url: https://api.eclipse.org
-    publisher-agreement:
-      timezone: US/Eastern
   integrity:
     key-pair: create # create, renew, delete, 'undefined'
   registry:
     version: 'OPENVSX_VERSION'
+  # Set this in any deployment reachable from the open web, or the URLs in a response are derived
+  # from headers the client sends. See doc/configuration.md, Server URL.
+  #  server:
+  #    url: https://openvsx.example
   storage:
     local:
       directory: /tmp/extensions

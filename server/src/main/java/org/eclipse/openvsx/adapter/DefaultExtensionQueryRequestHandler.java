@@ -1,20 +1,24 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.adapter;
-
-import org.eclipse.openvsx.util.NamingUtil;
-import org.eclipse.openvsx.util.NotFoundException;
-import org.springframework.web.server.ResponseStatusException;
 
 import java.util.*;
 import java.util.stream.Collectors;
+
+import org.springframework.web.server.ResponseStatusException;
+
+import org.eclipse.openvsx.util.NamingUtil;
+import org.eclipse.openvsx.util.NotFoundException;
 
 public class DefaultExtensionQueryRequestHandler implements IExtensionQueryRequestHandler {
 
@@ -47,13 +51,13 @@ public class DefaultExtensionQueryRequestHandler implements IExtensionQueryReque
         var extensionIds = new HashSet<String>();
 
         var services = getVSCodeServices().iterator();
-        while(extensions.size() < pageSize && services.hasNext()) {
+        while (extensions.size() < pageSize && services.hasNext()) {
             try {
                 var service = services.next();
-                if(extensions.isEmpty()) {
+                if (extensions.isEmpty()) {
                     var subResult = service.extensionQuery(param, defaultPageSize);
                     var subExtensions = subResult.results().getFirst().extensions();
-                    if(subExtensions != null) {
+                    if (subExtensions != null) {
                         extensions.addAll(subExtensions);
                     }
 
@@ -80,8 +84,13 @@ public class DefaultExtensionQueryRequestHandler implements IExtensionQueryReque
         return local.toQueryResult(extensions, totalCount);
     }
 
-    private void mergeExtensionQueryResults(List<ExtensionQueryResult.Extension> extensions, Set<String> extensionIds, List<ExtensionQueryResult.Extension> subExtensions, int limit) {
-        if(extensionIds.isEmpty() && !extensions.isEmpty()) {
+    private void mergeExtensionQueryResults(
+            List<ExtensionQueryResult.Extension> extensions,
+            Set<String> extensionIds,
+            List<ExtensionQueryResult.Extension> subExtensions,
+            int limit
+    ) {
+        if (extensionIds.isEmpty() && !extensions.isEmpty()) {
             var extensionIdSet = extensions.stream()
                     .map(NamingUtil::toExtensionId)
                     .collect(Collectors.toSet());
@@ -93,7 +102,7 @@ public class DefaultExtensionQueryRequestHandler implements IExtensionQueryReque
         while (subExtensionsIter.hasNext() && extensions.size() < limit) {
             var subExtension = subExtensionsIter.next();
             var key = NamingUtil.toExtensionId(subExtension);
-            if(!extensionIds.contains(key)) {
+            if (!extensionIds.contains(key)) {
                 extensions.add(subExtension);
                 extensionIds.add(key);
             }

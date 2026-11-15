@@ -1,0 +1,284 @@
+/******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation.
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
+package org.eclipse.openvsx.trustedpublishing.github;
+
+import java.io.IOException;
+import java.net.InetAddress;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
+
+import com.sun.net.httpserver.HttpServer;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.security.oauth2.jwt.Jwt;
+import org.springframework.test.context.junit.jupiter.SpringExtension;
+
+import org.eclipse.openvsx.trustedpublishing.TrustedPublishingConfig;
+import org.eclipse.openvsx.util.ErrorResultException;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+@ExtendWith(SpringExtension.class)
+class GitHubTrustedPublishingProviderTest {
+
+    @Autowired
+    TrustedPublishingConfig config;
+
+    private static Map<String, String> tokenClaims() {
+        var claims = new HashMap<String, String>();
+        claims.put("sub", "repo:eclipse-openvsx/openvsx:ref:refs/heads/main");
+        claims.put("repository", "eclipse-openvsx/openvsx");
+        claims.put("repository_id", "226955212");
+        claims.put("repository_owner", "eclipse-openvsx");
+        claims.put("repository_owner_id", "163524810");
+        claims.put("runner_environment", "github-hosted");
+        claims.put("workflow_ref", "eclipse-openvsx/openvsx/.github/workflows/release.yml@refs/heads/main");
+        return claims;
+    }
+
+    private static Map<String, String> registeredClaims() {
+        var claims = new HashMap<String, String>();
+        claims.put("repository", "eclipse-openvsx/openvsx");
+        claims.put("repository_id", "226955212");
+        claims.put("repository_owner", "eclipse-openvsx");
+        claims.put("repository_owner_id", "163524810");
+        claims.put("workflow_ref", "eclipse-openvsx/openvsx/.github/workflows/release.yml");
+        return claims;
+    }
+
+    private static GitHubTrustedPublishingProvider newProvider(TrustedPublishingConfig config) {
+        return new GitHubTrustedPublishingProvider(config) {
+            @Override
+            protected Map<String, Object> resolve(String owner, String repo) {
+                return Map.of(
+                        "id",
+                        226955212,
+                        "owner",
+                        Map.of("id", 163524810));
+            }
+        };
+    }
+
+    /** Serves one canned answer on a local port, so that the provider's own HTTP handling is exercised. */
+    private static HttpServer server(int status, String body) throws IOException {
+        var server = HttpServer.create(new InetSocketAddress(InetAddress.getLoopbackAddress(), 0), 0);
+        server.createContext("/", exchange -> {
+            var bytes = body.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().add("Content-Type", "application/json");
+            exchange.sendResponseHeaders(status, bytes.length);
+            exchange.getResponseBody().write(bytes);
+            exchange.close();
+        });
+        server.start();
+        return server;
+    }
+
+    private Map<String, Object> resolveAgainst(HttpServer server) {
+        var url = "http://localhost:" + server.getAddress().getPort();
+        var gh = new GitHubTrustedPublishingProviderSupport(
+                config,
+                "github",
+                "GitHub",
+                url,
+                url,
+                url + "/repos/{owner}/{repo}") {
+        };
+        try {
+            return gh.resolve("octo", "private");
+        } finally {
+            server.stop(0);
+        }
+    }
+
+    @Test
+    void resolveReturnsTheRepositoryTheApiAnswers() throws Exception {
+        var resolved = resolveAgainst(server(200, "{\"id\":42,\"owner\":{\"id\":7}}"));
+        assertEquals(42, ((Number) resolved.get("id")).intValue());
+    }
+
+    @Test
+    void resolveTreatsA404AsAnUnknownRepository() throws Exception {
+        // GitHub also answers 404 for a private repository
+        assertNull(resolveAgainst(server(404, "{\"message\":\"Not Found\"}")));
+    }
+
+    @Test
+    void resolveFailsOnAnyOtherErrorInsteadOfRegisteringPending() throws Exception {
+        assertThrows(ErrorResultException.class, () -> resolveAgainst(server(403, "{\"message\":\"rate limit\"}")));
+        assertThrows(ErrorResultException.class, () -> resolveAgainst(server(500, "{}")));
+    }
+
+    @Test
+    void extractClaimsRecordsRunInformation() {
+        var claims = new HashMap<String, Object>(tokenClaims());
+        claims.put("job_workflow_ref", "eclipse-openvsx/shared/.github/workflows/build.yml@refs/heads/main");
+        claims.put("run_id", "1658821493");
+        claims.put("sha", "ffac537e6cbbf934b08745a378932722df287a53");
+        Jwt jwt = Jwt.withTokenValue("t").header("alg", "none").claims(c -> c.putAll(claims))
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        Map<String, String> result = newProvider(config).extractClaims(jwt);
+        assertEquals(claims, result);
+        // recorded only: the extra claims do not influence matching
+        assertTrue(newProvider(config).matches(registeredClaims(), result));
+    }
+
+    @Test
+    void extractClaimsWithoutRunInformation() {
+        Jwt jwt = Jwt.withTokenValue("t").header("alg", "none").claims(c -> c.putAll(tokenClaims()))
+                .issuedAt(Instant.now()).expiresAt(Instant.now().plusSeconds(60)).build();
+        assertEquals(tokenClaims(), newProvider(config).extractClaims(jwt));
+    }
+
+    @Test
+    void trustRequestWithoutEnv() throws Exception {
+        GitHubTrustedPublishingProvider gh = newProvider(config);
+        Map<String, String> data = gh.extractRequest(
+                Map.of(
+                        "owner",
+                        "eclipse-openvsx",
+                        "repo",
+                        "openvsx",
+                        "workflow",
+                        "release.yml"));
+        assertEquals("eclipse-openvsx", data.get("repository_owner"));
+        assertEquals("163524810", data.get("repository_owner_id"));
+        assertEquals("eclipse-openvsx/openvsx", data.get("repository"));
+        assertEquals("226955212", data.get("repository_id"));
+        assertEquals("eclipse-openvsx/openvsx/.github/workflows/release.yml", data.get("workflow_ref"));
+        assertEquals(5, data.size());
+    }
+
+    @Test
+    void trustRequestWithEnv() throws Exception {
+        GitHubTrustedPublishingProvider gh = newProvider(config);
+        Map<String, String> data = gh.extractRequest(
+                Map.of(
+                        "owner",
+                        "eclipse-openvsx",
+                        "repo",
+                        "openvsx",
+                        "workflow",
+                        "release.yml",
+                        "environment",
+                        "prod"));
+        assertEquals("eclipse-openvsx", data.get("repository_owner"));
+        assertEquals("163524810", data.get("repository_owner_id"));
+        assertEquals("eclipse-openvsx/openvsx", data.get("repository"));
+        assertEquals("226955212", data.get("repository_id"));
+        assertEquals("eclipse-openvsx/openvsx/.github/workflows/release.yml", data.get("workflow_ref"));
+        assertEquals("prod", data.get("environment"));
+        assertEquals(6, data.size());
+    }
+
+    private static GitHubTrustedPublishingProvider privateRepositoryProvider(TrustedPublishingConfig config) {
+        return new GitHubTrustedPublishingProvider(config) {
+            @Override
+            protected Map<String, Object> resolve(String owner, String repo) {
+                return null; // GitHub answers 404 for a private repository
+            }
+        };
+    }
+
+    @Test
+    void trustRequestForUnresolvableRepositoryLacksIds() {
+        var gh = privateRepositoryProvider(config);
+        Map<String, String> data = gh.extractRequest(
+                Map.of("owner", "eclipse-openvsx", "repo", "openvsx", "workflow", "release.yml"));
+        assertEquals("eclipse-openvsx/openvsx", data.get("repository"));
+        assertEquals("eclipse-openvsx/openvsx/.github/workflows/release.yml", data.get("workflow_ref"));
+        assertFalse(data.containsKey("repository_id"));
+        assertFalse(data.containsKey("repository_owner_id"));
+        assertTrue(gh.lacksIds(data));
+        assertFalse(gh.lacksIds(registeredClaims()));
+    }
+
+    @Test
+    void pendingRegistrationMatchesByNamesOnceBoundToTheTokenIds() {
+        var gh = privateRepositoryProvider(config);
+        var pending = new HashMap<>(registeredClaims());
+        pending.remove("repository_id");
+        pending.remove("repository_owner_id");
+        var token = tokenClaims();
+
+        var bound = gh.withIdsOf(pending, token);
+        assertEquals("226955212", bound.get("repository_id"));
+        assertEquals("163524810", bound.get("repository_owner_id"));
+        assertTrue(gh.matches(bound, token));
+
+        // a token of another workflow of the repository is not the registered one
+        var otherWorkflow = new HashMap<>(token);
+        otherWorkflow.put("workflow_ref", "eclipse-openvsx/openvsx/.github/workflows/other.yml@refs/heads/main");
+        assertFalse(gh.matches(gh.withIdsOf(pending, otherWorkflow), otherWorkflow));
+        // and a pending registration is never matched as it is, without IDs
+        assertFalse(gh.matches(pending, token));
+    }
+
+    @Test
+    void matchesRegardlessOfRef() {
+        GitHubTrustedPublishingProvider gh = newProvider(config);
+        var token = tokenClaims();
+        assertTrue(gh.matches(registeredClaims(), token));
+        token.put("workflow_ref", "eclipse-openvsx/openvsx/.github/workflows/release.yml@refs/tags/v1.0.0");
+        assertTrue(gh.matches(registeredClaims(), token));
+    }
+
+    @Test
+    void mismatchOnDifferentRepositoryId() {
+        GitHubTrustedPublishingProvider gh = newProvider(config);
+        var token = tokenClaims();
+        token.put("repository_id", "1"); // resurrection attack: same name, different repository
+        assertFalse(gh.matches(registeredClaims(), token));
+    }
+
+    @Test
+    void mismatchOnDifferentWorkflow() {
+        GitHubTrustedPublishingProvider gh = newProvider(config);
+        var token = tokenClaims();
+        token.put("workflow_ref", "eclipse-openvsx/openvsx/.github/workflows/other.yml@refs/heads/main");
+        assertFalse(gh.matches(registeredClaims(), token));
+    }
+
+    @Test
+    void pinnedEnvironment() {
+        GitHubTrustedPublishingProvider gh = newProvider(config);
+        var registered = registeredClaims();
+        registered.put("environment", "prod");
+
+        var token = tokenClaims();
+        assertFalse(gh.matches(registered, token)); // token not from any environment
+        token.put("environment", "staging");
+        assertFalse(gh.matches(registered, token));
+        token.put("environment", "prod");
+        assertTrue(gh.matches(registered, token));
+        // and with no pinned environment, any environment is accepted
+        assertTrue(gh.matches(registeredClaims(), token));
+    }
+
+    @TestConfiguration
+    static class TestConfig {
+        @Bean
+        TrustedPublishingConfig trustedPublishingConfig() {
+            return new TrustedPublishingConfig();
+        }
+    }
+}

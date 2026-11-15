@@ -1,21 +1,21 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2021 Red Hat, Inc. and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
-
+ *****************************************************************************/
 package org.eclipse.openvsx.search;
 
+import java.util.*;
+import java.util.stream.Stream;
+
 import jakarta.transaction.Transactional;
-import org.eclipse.openvsx.entities.Extension;
-import org.eclipse.openvsx.repositories.RepositoryService;
-import org.eclipse.openvsx.search.RelevanceService.SearchStats;
-import org.eclipse.openvsx.util.ErrorResultException;
-import org.eclipse.openvsx.util.TargetPlatform;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.cache.annotation.CacheEvict;
 import org.springframework.cache.annotation.Cacheable;
@@ -23,8 +23,11 @@ import org.springframework.data.util.Streamable;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
-import java.util.*;
-import java.util.stream.Stream;
+import org.eclipse.openvsx.entities.Extension;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.search.RelevanceService.SearchStats;
+import org.eclipse.openvsx.util.ErrorResultException;
+import org.eclipse.openvsx.util.TargetPlatform;
 
 import static org.eclipse.openvsx.cache.CacheService.CACHE_AVERAGE_REVIEW_RATING;
 import static org.eclipse.openvsx.cache.CacheService.CACHE_DATABASE_SEARCH;
@@ -48,11 +51,14 @@ public class DatabaseSearchService implements ISearchService {
         this.repositories = repositories;
 
         comparators = Map.of(
-                SortBy.RELEVANCE, new RelevanceComparator(),
-                SortBy.TIMESTAMP, new TimestampComparator(),
-                SortBy.RATING, new RatingComparator(),
-                SortBy.DOWNLOADS, new DownloadedCountComparator()
-        );
+                SortBy.RELEVANCE,
+                new RelevanceComparator(),
+                SortBy.TIMESTAMP,
+                new TimestampComparator(),
+                SortBy.RATING,
+                new RatingComparator(),
+                SortBy.DOWNLOADS,
+                new DownloadedCountComparator());
     }
 
     public boolean isEnabled() {
@@ -118,9 +124,9 @@ public class DatabaseSearchService implements ISearchService {
             return extension.getName().toLowerCase().contains(options.queryString().toLowerCase())
                     || extension.getNamespace().getName().contains(options.queryString().toLowerCase())
                     || (latest.getDescription() != null && latest.getDescription()
-                    .toLowerCase().contains(options.queryString().toLowerCase()))
+                            .toLowerCase().contains(options.queryString().toLowerCase()))
                     || (latest.getDisplayName() != null && latest.getDisplayName()
-                    .toLowerCase().contains(options.queryString().toLowerCase()));
+                            .toLowerCase().contains(options.queryString().toLowerCase()));
         });
     }
 
@@ -140,7 +146,9 @@ public class DatabaseSearchService implements ISearchService {
             return matchingExtensions;
         }
 
-        return matchingExtensions.filter(extension -> extension.getVersions().stream().anyMatch(ev -> ev.getTargetPlatform().equals(options.targetPlatform())));
+        return matchingExtensions.filter(
+                extension -> extension.getVersions().stream()
+                        .anyMatch(ev -> ev.getTargetPlatform().equals(options.targetPlatform())));
     }
 
     private Streamable<Extension> includeByNamespace(Options options, Streamable<Extension> matchingExtensions) {
@@ -148,7 +156,8 @@ public class DatabaseSearchService implements ISearchService {
             return matchingExtensions;
         }
 
-        return matchingExtensions.filter(extension -> extension.getNamespace().getName().equalsIgnoreCase(options.namespace()));
+        return matchingExtensions
+                .filter(extension -> extension.getNamespace().getName().equalsIgnoreCase(options.namespace()));
     }
 
     private Streamable<Extension> excludeByNamespace(Options options, Streamable<Extension> matchingExtensions) {
@@ -157,7 +166,8 @@ public class DatabaseSearchService implements ISearchService {
         }
 
         var namespacesToExclude = List.of(options.namespacesToExclude());
-        return matchingExtensions.filter(extension -> !namespacesToExclude.contains(extension.getNamespace().getName()));
+        return matchingExtensions
+                .filter(extension -> !namespacesToExclude.contains(extension.getNamespace().getName()));
     }
 
     @Override

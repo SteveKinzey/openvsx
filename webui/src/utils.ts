@@ -8,9 +8,9 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import { ErrorResponse } from './server-request';
+import { ErrorResponse, ProblemDetail } from './server-request';
 
-export function addQuery(url: string, queries: { key: string, value: string | number | undefined }[]): string {
+export function addQuery(url: string, queries: { key: string; value: string | number | undefined }[]): string {
     const nonEmpty = queries.filter(q => q.value !== undefined);
     if (nonEmpty.length === 0) {
         return url;
@@ -18,7 +18,10 @@ export function addQuery(url: string, queries: { key: string, value: string | nu
     return url + '?' + nonEmpty.map<string>(q => q.key + '=' + encodeURIComponent(q.value!)).join('&');
 }
 
-export function createAbsoluteURL(arr: string[], queries?: { key: string, value: string | number | undefined }[]): string {
+export function createAbsoluteURL(
+    arr: string[],
+    queries?: { key: string; value: string | number | undefined }[]
+): string {
     const url = arr.length === 0 ? '' : arr.reduce((prev, curr) => prev + '/' + curr);
     if (queries && queries.length > 0) {
         return addQuery(url, queries);
@@ -27,7 +30,7 @@ export function createAbsoluteURL(arr: string[], queries?: { key: string, value:
     }
 }
 
-export function createRoute(arr: string[], queries?: { key: string, value: string | number }[]): string {
+export function createRoute(arr: string[], queries?: { key: string; value: string | number }[]): string {
     const url = createAbsoluteURL(arr, queries);
     return url.startsWith('/') ? url : '/' + url;
 }
@@ -35,6 +38,53 @@ export function createRoute(arr: string[], queries?: { key: string, value: strin
 export function debounce(task: () => void, token: { timeout?: number }, delay: number = 150): void {
     clearTimeout(token.timeout);
     token.timeout = window.setTimeout(task, delay);
+}
+
+/**
+ * Moves an input/textarea's cursor to the end of its current value. Deferred to the next frame:
+ * browsers select-all by default right after a programmatic `.focus()`, which would otherwise
+ * overwrite this.
+ */
+export function moveCursorToEnd(element: HTMLInputElement | HTMLTextAreaElement): void {
+    requestAnimationFrame(() => element.setSelectionRange(element.value.length, element.value.length));
+}
+
+const compactNumberFormat = new Intl.NumberFormat(undefined, {
+    notation: 'compact',
+    compactDisplay: 'short'
+} as Intl.NumberFormatOptions);
+
+/** Formats large counts compactly, e.g. 12345 -> "12K". */
+export function formatCompactNumber(value: number): string {
+    return compactNumberFormat.format(value);
+}
+
+const ratingFormat = new Intl.NumberFormat(undefined, {
+    minimumFractionDigits: 1,
+    maximumFractionDigits: 1
+});
+
+/** Formats a star rating to one decimal, e.g. 4.25 -> "4.3". Unlike toFixed, which always emits a
+ *  '.', this follows the viewer's locale like every other number on a card does. */
+export function formatRating(value: number): string {
+    return ratingFormat.format(value);
+}
+
+const FILE_SIZE_UNITS = ['B', 'kB', 'MB', 'GB', 'TB'];
+
+/** Formats a byte count for humans, e.g. 5242880 -> "5.00 MB". */
+export function formatFileSize(bytes: number): string {
+    let value = bytes;
+    let unitIndex = 0;
+    while (value >= 1024 && unitIndex < FILE_SIZE_UNITS.length - 1) {
+        value /= 1024;
+        unitIndex++;
+    }
+    const formatted =
+        unitIndex === 0
+            ? value.toString()
+            : value.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return `${formatted} ${FILE_SIZE_UNITS[unitIndex]}`;
 }
 
 export function toLocalTime(timestamp?: string): string | undefined {
@@ -68,7 +118,7 @@ export function toRelativeTime(timestamp?: string, isFutureTime: boolean = false
     if (isFutureTime) {
         const remaining = -elapsed;
         if (remaining < 0) {
-            return "now";
+            return 'now';
         } else if (remaining < msPerMinute) {
             const value = Math.round(remaining / msPerSecond);
             return `in ${value} second${value !== 1 ? 's' : ''}`;
@@ -110,7 +160,29 @@ export function toRelativeTime(timestamp?: string, isFutureTime: boolean = false
     }
 }
 
-export function handleError(err?: Error | Partial<ErrorResponse>): string {
+/** Short form of {@link toRelativeTime} for tight layouts: "5m", "3h", "2d", "4mo", "1y". */
+export function toCompactRelativeTime(timestamp?: string): string | undefined {
+    if (!timestamp) {
+        return undefined;
+    }
+    const elapsed = Date.now() - new Date(timestamp).getTime();
+    if (elapsed < msPerMinute) {
+        return 'now';
+    } else if (elapsed < msPerHour) {
+        return `${Math.round(elapsed / msPerMinute)}m`;
+    } else if (elapsed < msPerDay) {
+        return `${Math.round(elapsed / msPerHour)}h`;
+    } else if (elapsed < msPerMonth) {
+        return `${Math.round(elapsed / msPerDay)}d`;
+    } else if (elapsed < msPerYear) {
+        return `${Math.round(elapsed / msPerMonth)}mo`;
+    } else {
+        return `${Math.round(elapsed / msPerYear)}y`;
+    }
+}
+
+/** Takes whatever was thrown or returned — callers rarely know the shape — and narrows it here. */
+export function handleError(err?: unknown): string {
     if (err) {
         if (err instanceof Error && err.name === 'AbortError') {
             return '';
@@ -119,17 +191,29 @@ export function handleError(err?: Error | Partial<ErrorResponse>): string {
         console.error(err);
 
         if (err instanceof Error) {
-            if (err.message === 'Failed to fetch'
-                || err.message === 'Unexpected token < in JSON at position 0') {
+            if (err.message === 'Failed to fetch' || err.message === 'Unexpected token < in JSON at position 0') {
                 return 'Something went wrong while fetching data. Please contact the site administrators.';
             }
             return `An unexpected error occurred: ${err.message}`;
-        } else if (err.error && err.message) {
-            return `${err.error} (${err.message})`;
-        } else if (err.error) {
-            return err.error;
-        } else if (err.message) {
-            return err.message;
+        }
+        // A failed request rejects with the parsed server body, not an Error.
+        const body = (typeof err === 'object' ? err : {}) as Partial<ErrorResponse> & ProblemDetail;
+        const { error, message } = body;
+        if (error && message) {
+            return `${error} (${message})`;
+        } else if (error) {
+            return error;
+        } else if (message) {
+            return message;
+        }
+        // No `error` means a problem+json body rather than a ResultJson one: parameter validation puts
+        // the offending parameters in `errors`, other framework errors put prose in `detail`.
+        if (body.errors?.length) {
+            return [body.title, body.errors.join(', ')].filter(Boolean).join(': ');
+        } else if (body.detail) {
+            return body.title ? `${body.title}: ${body.detail}` : body.detail;
+        } else if (body.title) {
+            return body.title;
         }
     }
     return 'An unexpected error occurred.';

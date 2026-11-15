@@ -31,12 +31,14 @@ Open VSX is a [vendor-neutral](https://projects.eclipse.org/projects/ecd.openvsx
 
 A public instance of Open VSX is running at [open-vsx.org](https://open-vsx.org/). Please report issues related to that instance at [EclipseFdn/open-vsx.org](https://github.com/EclipseFdn/open-vsx.org).
 
-For information on publishing and managing extensions at open-vsx.org, please see 
+For information on publishing and managing extensions at open-vsx.org, please see
 the [EclipseFdn/open-vsx.org wiki](https://github.com/EclipseFdn/open-vsx.org/wiki).
 
 ## Getting Started
 
 See the [openvsx Wiki](https://github.com/eclipse-openvsx/openvsx/wiki) for documentation of general concepts and usage of this project.
+
+To run your own registry, see [Deploying Open VSX](doc/deployment.md) for the deployment options and the reverse proxy setup, [Open VSX Configuration Properties](doc/configuration.md) for the properties the server understands, [Admin Roles and Permissions](doc/permissions.md) for what an admin role or permission grants, and [Mirror Mode](doc/mirror.md) for running it as a copy of another registry.
 
 ## Development
 

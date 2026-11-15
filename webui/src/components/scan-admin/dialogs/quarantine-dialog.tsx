@@ -12,7 +12,19 @@
  ********************************************************************************/
 
 import { FunctionComponent, useMemo } from 'react';
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography, List, ListItem, ListItemText, Box, Tooltip } from '@mui/material';
+import {
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogActions,
+    Button,
+    Typography,
+    List,
+    ListItem,
+    ListItemText,
+    Box,
+    Tooltip
+} from '@mui/material';
 import { Info as InfoIcon } from '@mui/icons-material';
 import { useDialogs } from '../../../hooks/scan-admin';
 import { useTheme } from '@mui/material/styles';
@@ -79,65 +91,114 @@ export const QuarantineDialog: FunctionComponent = () => {
         );
     }, [confirmDialog.selectedExtensions]);
 
+    // An errored scan can still carry threats persisted by scanners that finished; those go through
+    // the regular dialog so that the files about to be allow-listed are shown.
+    const allErrored =
+        confirmDialog.selectedExtensions.length > 0 &&
+        confirmDialog.selectedExtensions.every(
+            (scan: ScanResult) => scan.status === 'ERROR' && (scan.threats?.length ?? 0) === 0
+        );
+
+    if (allErrored) {
+        const count = confirmDialog.selectedExtensions.length;
+        return (
+            <Dialog open={confirmDialog.isOpen} onClose={confirmDialog.close} maxWidth='md' fullWidth>
+                <DialogTitle>Confirm Allow</DialogTitle>
+                <DialogContent>
+                    <Typography variant='body1' sx={{ mb: 2 }}>
+                        Activate {count} extension version{count !== 1 ? 's' : ''} although the scan ended in an error?
+                        {count !== 1 ? ' They become' : ' It becomes'} publicly available without a completed scan.
+                    </Typography>
+                    <List
+                        sx={{
+                            maxHeight: '400px',
+                            overflow: 'auto',
+                            border: `1px solid ${theme.palette.scanBackground.default}`,
+                            borderRadius: 1
+                        }}>
+                        {confirmDialog.selectedExtensions.map((scan: ScanResult) => (
+                            <ListItem key={scan.id}>
+                                <ListItemText
+                                    primary={`${scan.namespace}.${scan.extensionName} ${scan.version}`}
+                                    secondary={scan.errorMessage}
+                                />
+                            </ListItem>
+                        ))}
+                    </List>
+                </DialogContent>
+                <DialogActions sx={{ px: 3, pb: 2 }}>
+                    <Button onClick={confirmDialog.close} color='inherit'>
+                        Cancel
+                    </Button>
+                    <Button onClick={confirmDialog.execute} variant='contained' color='success'>
+                        Confirm Allow
+                    </Button>
+                </DialogActions>
+            </Dialog>
+        );
+    }
+
     return (
-        <Dialog
-            open={confirmDialog.isOpen}
-            onClose={confirmDialog.close}
-            maxWidth='md'
-            fullWidth
-        >
-            <DialogTitle>
-                {confirmDialog.action === 'allow' ? 'Confirm Allow' : 'Confirm Block'}
-            </DialogTitle>
+        <Dialog open={confirmDialog.isOpen} onClose={confirmDialog.close} maxWidth='md' fullWidth>
+            <DialogTitle>{confirmDialog.action === 'allow' ? 'Confirm Allow' : 'Confirm Block'}</DialogTitle>
             <DialogContent>
                 <Typography variant='body1' sx={{ mb: 2 }}>
-                    Are you sure you want to {confirmDialog.action} {totalActionableFiles} file{totalActionableFiles !== 1 ? 's' : ''} from {confirmDialog.selectedExtensions.length !== 1 ? 'these' : 'this'} {confirmDialog.selectedExtensions.length} extension{confirmDialog.selectedExtensions.length !== 1 ? 's' : ''}?
+                    Are you sure you want to {confirmDialog.action} {totalActionableFiles} file
+                    {totalActionableFiles !== 1 ? 's' : ''} from{' '}
+                    {confirmDialog.selectedExtensions.length !== 1 ? 'these' : 'this'}{' '}
+                    {confirmDialog.selectedExtensions.length} extension
+                    {confirmDialog.selectedExtensions.length !== 1 ? 's' : ''}?
                 </Typography>
 
                 {/* Info message about unenforced threats */}
                 {hasAnyUnenforcedThreats && (
-                    <Box sx={{
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: 1,
-                        mb: 2,
-                        p: 1.5,
-                        backgroundColor: theme.palette.info.dark + '20',
-                        borderRadius: 1,
-                        border: `1px solid ${theme.palette.info.dark}40`,
-                    }}>
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: 1,
+                            mb: 2,
+                            p: 1.5,
+                            backgroundColor: theme.palette.info.dark + '20',
+                            borderRadius: 1,
+                            border: `1px solid ${theme.palette.info.dark}40`
+                        }}>
                         <InfoIcon sx={{ fontSize: 18, color: theme.palette.info.main, mt: 0.25 }} />
                         <Typography variant='body2' color='text.secondary'>
-                            Some extensions have unenforced threats. These are informational only and will not be added to the {confirmDialog.action === 'allow' ? 'allow' : 'block'} list.
+                            Some extensions have unenforced threats. These are informational only and will not be added
+                            to the {confirmDialog.action === 'allow' ? 'allow' : 'block'} list.
                         </Typography>
                     </Box>
                 )}
 
                 {/* Info message about threats without file info */}
                 {hasThreatsWithoutFileInfo && (
-                    <Box sx={{
-                        display: 'flex',
-                        alignItems: 'flex-start',
-                        gap: 1,
-                        mb: 2,
-                        p: 1.5,
-                        backgroundColor: theme.palette.info.dark + '20',
-                        borderRadius: 1,
-                        border: `1px solid ${theme.palette.info.dark}40`,
-                    }}>
+                    <Box
+                        sx={{
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: 1,
+                            mb: 2,
+                            p: 1.5,
+                            backgroundColor: theme.palette.info.dark + '20',
+                            borderRadius: 1,
+                            border: `1px solid ${theme.palette.info.dark}40`
+                        }}>
                         <InfoIcon sx={{ fontSize: 18, color: theme.palette.info.main, mt: 0.25 }} />
                         <Typography variant='body2' color='text.secondary'>
-                            Some threats do not have file-level information (e.g., from scanners that analyze the whole package). These cannot be added to allow/block lists.
+                            Some threats do not have file-level information (e.g., from scanners that analyze the whole
+                            package). These cannot be added to allow/block lists.
                         </Typography>
                     </Box>
                 )}
 
-                <List sx={{
-                    maxHeight: '400px',
-                    overflow: 'auto',
-                    border: `1px solid ${theme.palette.scanBackground.default}`,
-                    borderRadius: 1,
-                }}>
+                <List
+                    sx={{
+                        maxHeight: '400px',
+                        overflow: 'auto',
+                        border: `1px solid ${theme.palette.scanBackground.default}`,
+                        borderRadius: 1
+                    }}>
                     {confirmDialog.selectedExtensions.map((scan: ScanResult) => {
                         const actionableThreats = getActionableThreats(scan);
                         const enforcedThreats = getEnforcedThreats(scan);
@@ -151,9 +212,8 @@ export const QuarantineDialog: FunctionComponent = () => {
                                     '&:last-child': { borderBottom: 'none' },
                                     display: 'flex',
                                     alignItems: 'flex-start',
-                                    gap: 2,
-                                }}
-                            >
+                                    gap: 2
+                                }}>
                                 <ListItemText
                                     sx={{ flex: 1, minWidth: 0 }}
                                     primary={
@@ -163,9 +223,8 @@ export const QuarantineDialog: FunctionComponent = () => {
                                                 fontWeight: 500,
                                                 overflow: 'hidden',
                                                 textOverflow: 'ellipsis',
-                                                whiteSpace: 'nowrap',
-                                            }}
-                                        >
+                                                whiteSpace: 'nowrap'
+                                            }}>
                                             {scan.displayName}
                                         </Typography>
                                     }
@@ -177,9 +236,8 @@ export const QuarantineDialog: FunctionComponent = () => {
                                                 sx={{
                                                     overflow: 'hidden',
                                                     textOverflow: 'ellipsis',
-                                                    whiteSpace: 'nowrap',
-                                                }}
-                                            >
+                                                    whiteSpace: 'nowrap'
+                                                }}>
                                                 {scan.namespace}.{scan.extensionName}
                                             </Typography>
                                             <Typography
@@ -188,9 +246,8 @@ export const QuarantineDialog: FunctionComponent = () => {
                                                 sx={{
                                                     overflow: 'hidden',
                                                     textOverflow: 'ellipsis',
-                                                    whiteSpace: 'nowrap',
-                                                }}
-                                            >
+                                                    whiteSpace: 'nowrap'
+                                                }}>
                                                 Publisher: {scan.publisher}
                                             </Typography>
                                             <Typography
@@ -199,9 +256,8 @@ export const QuarantineDialog: FunctionComponent = () => {
                                                 sx={{
                                                     overflow: 'hidden',
                                                     textOverflow: 'ellipsis',
-                                                    whiteSpace: 'nowrap',
-                                                }}
-                                            >
+                                                    whiteSpace: 'nowrap'
+                                                }}>
                                                 Version: {scan.version}
                                             </Typography>
                                         </Box>
@@ -224,25 +280,29 @@ export const QuarantineDialog: FunctionComponent = () => {
                                             'No actionable files (no file-level info)'
                                         )
                                     }
-                                    arrow
-                                >
-                                    <Box sx={{
-                                        flexShrink: 0,
-                                        alignSelf: 'flex-start',
-                                        mt: 0.5,
-                                        cursor: 'pointer',
-                                        textAlign: 'right',
-                                    }}>
+                                    arrow>
+                                    <Box
+                                        sx={{
+                                            flexShrink: 0,
+                                            alignSelf: 'flex-start',
+                                            mt: 0.5,
+                                            cursor: 'pointer',
+                                            textAlign: 'right'
+                                        }}>
                                         <Typography variant='body2' color='text.secondary'>
                                             {actionableThreats.length} file{actionableThreats.length !== 1 ? 's' : ''}
                                         </Typography>
-                                        {(enforcedThreats.length - actionableThreats.length) > 0 && (
-                                            <Typography variant='caption' sx={{ color: 'text.disabled', display: 'block' }}>
+                                        {enforcedThreats.length - actionableThreats.length > 0 && (
+                                            <Typography
+                                                variant='caption'
+                                                sx={{ color: 'text.disabled', display: 'block' }}>
                                                 +{enforcedThreats.length - actionableThreats.length} without file info
                                             </Typography>
                                         )}
                                         {unenforcedThreats.length > 0 && (
-                                            <Typography variant='caption' sx={{ color: 'text.disabled', display: 'block' }}>
+                                            <Typography
+                                                variant='caption'
+                                                sx={{ color: 'text.disabled', display: 'block' }}>
                                                 +{unenforcedThreats.length} unenforced
                                             </Typography>
                                         )}
@@ -260,8 +320,7 @@ export const QuarantineDialog: FunctionComponent = () => {
                 <Button
                     onClick={confirmDialog.execute}
                     variant='contained'
-                    color={confirmDialog.action === 'allow' ? 'success' : 'error'}
-                >
+                    color={confirmDialog.action === 'allow' ? 'success' : 'error'}>
                     Confirm {confirmDialog.action === 'allow' ? 'Allow' : 'Block'}
                 </Button>
             </DialogActions>

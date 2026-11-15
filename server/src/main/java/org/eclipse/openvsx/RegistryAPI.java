@@ -1,15 +1,27 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2019 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx;
 
-import com.google.common.collect.Iterables;
+import java.io.InputStream;
+import java.net.URI;
+import java.time.LocalDateTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.TimeUnit;
+
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.headers.Header;
@@ -17,16 +29,14 @@ import io.swagger.v3.oas.annotations.media.Content;
 import io.swagger.v3.oas.annotations.media.ExampleObject;
 import io.swagger.v3.oas.annotations.media.Schema;
 import io.swagger.v3.oas.annotations.responses.ApiResponse;
+import io.swagger.v3.oas.annotations.security.SecurityRequirement;
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Pattern;
 import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.entities.SemanticVersion;
-import org.eclipse.openvsx.settings.MutatingOperation;
-import org.eclipse.openvsx.json.*;
-import org.eclipse.openvsx.search.ISearchService;
-import org.eclipse.openvsx.search.SortBy;
-import org.eclipse.openvsx.util.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.*;
@@ -35,11 +45,14 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
-import java.io.InputStream;
-import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.TimeUnit;
+import org.eclipse.openvsx.entities.SemanticVersion;
+import org.eclipse.openvsx.json.*;
+import org.eclipse.openvsx.search.ISearchService;
+import org.eclipse.openvsx.search.SortBy;
+import org.eclipse.openvsx.settings.MutatingOperation;
+import org.eclipse.openvsx.util.*;
+import org.eclipse.openvsx.util.auth.LoggedInAuthentication;
+import org.eclipse.openvsx.web.PreviewOperation;
 
 import static org.eclipse.openvsx.util.TargetPlatform.*;
 
@@ -48,8 +61,12 @@ import static org.eclipse.openvsx.util.TargetPlatform.*;
 public class RegistryAPI {
     private static final int REVIEW_TITLE_SIZE = 255;
     private static final int REVIEW_COMMENT_SIZE = 2048;
-    private static final String VERSION_PATH_PARAM_REGEX = "(?:" + SemanticVersion.VERSION_PATH_PARAM_REGEX + ")|latest|pre-release";
+    private static final String VERSION_PATH_PARAM_REGEX = "(?:" + SemanticVersion.VERSION_PATH_PARAM_REGEX
+            + ")|latest|pre-release";
     private static final String NO_JSON_INPUT = "No JSON input.";
+    private static final String TOKEN_PARAM_DESCRIPTION = "A personal access token. Deprecated: send it via the "
+            + "Authorization: Bearer header instead (or " + HttpHeadersUtil.TOKEN_HEADER
+            + " if Authorization is already in use).";
 
     protected final Logger logger = LoggerFactory.getLogger(RegistryAPI.class);
 
@@ -70,8 +87,9 @@ public class RegistryAPI {
     protected Iterable<IExtensionRegistry> getRegistries() {
         var registries = new ArrayList<IExtensionRegistry>();
         registries.add(local);
-        if (upstream.isValid())
+        if (upstream.isValid()) {
             registries.add(upstream);
+        }
         return registries;
     }
 
@@ -91,9 +109,9 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<NamespaceJson> getNamespace(
-            @PathVariable @Parameter(description = "Namespace name", example = "eamodio")
-            String namespace
-        ) {
+            @PathVariable
+            @Parameter(description = "Namespace name", example = "eamodio") String namespace
+    ) {
         for (var registry : getRegistries()) {
             try {
                 return ResponseEntity.ok()
@@ -120,8 +138,13 @@ public class RegistryAPI {
         content = @Content(schema = @Schema(implementation = ResultJson.class))
     )
     @ApiResponse(
-        responseCode = "400",
-        description = "The token has no publishing permission in the namespace or is not valid",
+        responseCode = "401",
+        description = "The token is missing, invalid or expired",
+        content = @Content(schema = @Schema(implementation = ResultJson.class))
+    )
+    @ApiResponse(
+        responseCode = "403",
+        description = "The token is valid but has no publishing permission in the namespace",
         content = @Content(schema = @Schema(implementation = ResultJson.class))
     )
     @ApiResponse(
@@ -129,13 +152,18 @@ public class RegistryAPI {
         description = "The specified namespace could not be found",
         content = @Content(schema = @Schema(implementation = ResultJson.class))
     )
+    @SecurityRequirement(name = "bearerAuth")
     public ResponseEntity<ResultJson> verifyToken(
-            @PathVariable @Parameter(description = "Namespace", example = "GitLab")
-            String namespace,
-            @RequestParam @Parameter(description = "A personal access token") String token
+            HttpServletRequest request,
+            @PathVariable
+            @NotBlank(message = "namespace must not be blank")
+            @Parameter(description = "Namespace", example = "GitLab") String namespace,
+            @RequestParam(required = false)
+            @Parameter(description = TOKEN_PARAM_DESCRIPTION, deprecated = true) String token
     ) {
+        var tokenValue = HttpHeadersUtil.resolveAccessToken(request, token);
         try {
-            return ResponseEntity.ok(local.verifyToken(namespace, token));
+            return ResponseEntity.ok(local.verifyToken(namespace, tokenValue));
         } catch (NotFoundException exc) {
             var json = ResultJson.error("Namespace not found: " + namespace);
             return ResponseEntity.status(HttpStatus.NOT_FOUND).body(json);
@@ -145,23 +173,68 @@ public class RegistryAPI {
     }
 
     @GetMapping(
-            path = "/api/{namespace}/details",
-            produces = MediaType.APPLICATION_JSON_VALUE
+        path = "/api/-/size-limit",
+        produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @CrossOrigin
+    @Operation(
+        summary = "Get the maximum package size that may be published to a namespace/extension",
+        description = "Answers for a package that has not been published yet, so neither the namespace "
+                + "nor the extension needs to exist; the applicable default is returned when they do not."
+    )
+    @ApiResponse(
+        responseCode = "200",
+        description = "The applicable size limit is returned in JSON format",
+        content = @Content(schema = @Schema(implementation = SizeLimitJson.class))
+    )
+    @ApiResponse(
+        responseCode = "401",
+        description = "The token is missing, invalid or expired",
+        content = @Content(schema = @Schema(implementation = SizeLimitJson.class))
+    )
+    @ApiResponse(
+        responseCode = "403",
+        description = "The token is valid but has no publishing permission in the namespace",
+        content = @Content(schema = @Schema(implementation = SizeLimitJson.class))
+    )
+    @SecurityRequirement(name = "bearerAuth")
+    public ResponseEntity<SizeLimitJson> getSizeLimit(
+            HttpServletRequest request,
+            @RequestParam
+            @NotBlank(message = "namespace must not be blank")
+            @Parameter(description = "Namespace", example = "redhat") String namespace,
+            @RequestParam
+            @NotBlank(message = "extension must not be blank")
+            @Parameter(description = "Extension name", example = "java") String extension,
+            @RequestParam(required = false)
+            @Parameter(description = TOKEN_PARAM_DESCRIPTION, deprecated = true) String token
+    ) {
+        var tokenValue = HttpHeadersUtil.resolveAccessToken(request, token);
+        try {
+            return ResponseEntity.ok(local.getSizeLimit(namespace, extension, tokenValue));
+        } catch (ErrorResultException exc) {
+            return exc.toResponseEntity(SizeLimitJson.class);
+        }
+    }
+
+    @GetMapping(
+        path = "/api/{namespace}/details",
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
     @Operation()
     @ApiResponse(
-            responseCode = "200",
-            description = "The namespace details are returned in JSON format"
+        responseCode = "200",
+        description = "The namespace details are returned in JSON format"
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified namespace could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified namespace could not be found",
+        content = @Content()
     )
     public ResponseEntity<NamespaceDetailsJson> getNamespaceDetails(
-            @PathVariable @Parameter(description = "Namespace name", example = "devsense")
-            String namespace
+            @PathVariable
+            @Parameter(description = "Namespace name", example = "devsense") String namespace
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -186,8 +259,8 @@ public class RegistryAPI {
     }
 
     @GetMapping(
-            path = "/api/{namespace}/logo/{fileName}",
-            produces = { MediaType.IMAGE_JPEG_VALUE, MediaType.IMAGE_PNG_VALUE }
+        path = "/api/{namespace}/logo/{fileName}",
+        produces = { MediaType.IMAGE_JPEG_VALUE, MediaType.IMAGE_PNG_VALUE }
     )
     @CrossOrigin
     @Operation(summary = "Provides logo of a namespace")
@@ -200,10 +273,10 @@ public class RegistryAPI {
         description = "The specified namespace could not be found"
     )
     public ResponseEntity<StreamingResponseBody> getNamespaceLogo(
-            @PathVariable @Parameter(description = "Namespace name", example = "Codeium")
-            String namespace,
-            @PathVariable @Parameter(description = "Logo file name", example = "logo-codeium.png")
-            String fileName
+            @PathVariable
+            @Parameter(description = "Namespace name", example = "Codeium") String namespace,
+            @PathVariable
+            @Parameter(description = "Logo file name", example = "logo-codeium.png") String fileName
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -232,10 +305,10 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<ExtensionJson> getExtension(
-            @PathVariable @Parameter(description = "Extension namespace", example = "rust-lang")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "rust-analyzer")
-            String extension
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "rust-lang") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "rust-analyzer") String extension
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -267,23 +340,32 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<ExtensionJson> getExtension(
-            @PathVariable @Parameter(description = "Extension namespace", example = "Dart-Code")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "flutter")
-            String extension,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "Dart-Code") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "flutter") String extension,
             @PathVariable
             @Parameter(
                 description = "Target platform",
                 example = TargetPlatform.NAME_LINUX_ARM64,
-                schema = @Schema(type = "string", allowableValues = {
-                    NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                    NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                    NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                    NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                    NAME_WEB, NAME_UNIVERSAL
-                })
-            )
-            CharSequence targetPlatform
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) CharSequence targetPlatform
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -295,7 +377,9 @@ public class RegistryAPI {
                 // Try the next registry
             }
         }
-        var json = ExtensionJson.error(extensionNotFoundMessage(NamingUtil.toLogFormat(namespace, extension, targetPlatform.toString(), null)));
+        var json = ExtensionJson.error(
+                extensionNotFoundMessage(
+                        NamingUtil.toLogFormat(namespace, extension, targetPlatform.toString(), null)));
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(json);
     }
 
@@ -315,12 +399,12 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<ExtensionJson> getExtension(
-            @PathVariable @Parameter(description = "Extension namespace", example = "TabNine")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "tabnine-vscode")
-            String extension,
-            @PathVariable @Parameter(description = "Extension version", example = "3.172.0")
-            String version
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "TabNine") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "tabnine-vscode") String extension,
+            @PathVariable
+            @Parameter(description = "Extension version", example = "3.172.0") String version
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -342,7 +426,8 @@ public class RegistryAPI {
     }
 
     @GetMapping(
-        path = "/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX + "}/{version:" + VERSION_PATH_PARAM_REGEX + "}",
+        path = "/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX + "}/{version:"
+                + VERSION_PATH_PARAM_REGEX + "}",
         produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
@@ -357,25 +442,34 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<ExtensionJson> getExtension(
-            @PathVariable @Parameter(description = "Extension namespace", example = "julialang")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "language-julia")
-            String extension,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "julialang") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "language-julia") String extension,
             @PathVariable
             @Parameter(
                 description = "Target platform",
                 example = TargetPlatform.NAME_LINUX_ARM64,
-                schema = @Schema(type = "string", allowableValues = {
-                    NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                    NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                    NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                    NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                    NAME_WEB, NAME_UNIVERSAL
-                })
-            )
-            String targetPlatform,
-            @PathVariable @Parameter(description = "Extension version", example = "1.124.2")
-            String version
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform,
+            @PathVariable
+            @Parameter(description = "Extension version", example = "1.124.2") String version
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -392,13 +486,14 @@ public class RegistryAPI {
                 // Try the next registry
             }
         }
-        var json = ExtensionJson.error(extensionNotFoundMessage(NamingUtil.toLogFormat(namespace, extension, targetPlatform, version)));
+        var json = ExtensionJson
+                .error(extensionNotFoundMessage(NamingUtil.toLogFormat(namespace, extension, targetPlatform, version)));
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(json);
     }
 
     @GetMapping(
-            path = "/api/{namespace}/{extension}/versions",
-            produces = MediaType.APPLICATION_JSON_VALUE
+        path = "/api/{namespace}/{extension}/versions",
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
     @Operation(summary = "Provides a map of versions matching an extension")
@@ -412,70 +507,93 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<VersionsJson> getVersions(
-            @PathVariable @Parameter(description = "Extension namespace", example = "vscodevim")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "vim")
-            String extension,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "vscodevim") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "vim") String extension,
             @RequestParam(defaultValue = "18")
             @Min(value = 0, message = "parameter must not be negative")
             @Max(value = 100, message = "parameter must not exceed 100")
-            @Parameter(description = "Maximal number of entries to return", schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18"))
-            int size,
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18")
+            ) int size,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "parameter must not be negative")
-            @Parameter(description = "Number of entries to skip (usually a multiple of the page size)", schema = @Schema(type = "integer", minimum = "0", defaultValue = "0"))
-            int offset
+            @Parameter(
+                description = "Number of entries to skip (usually a multiple of the page size)",
+                schema = @Schema(type = "integer", minimum = "0", defaultValue = "0")
+            ) int offset
     ) {
         return handleGetVersions(namespace, extension, null, size, offset);
     }
 
     @GetMapping(
-            path = "/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX + "}/versions",
-            produces = MediaType.APPLICATION_JSON_VALUE
+        path = "/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX + "}/versions",
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
     @Operation(summary = "Provides a map of versions matching an extension")
     @ApiResponse(
-            responseCode = "200",
-            description = "The extension versions are returned in JSON format"
+        responseCode = "200",
+        description = "The extension versions are returned in JSON format"
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified extension could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified extension could not be found",
+        content = @Content()
     )
     public ResponseEntity<VersionsJson> getVersions(
-            @PathVariable @Parameter(description = "Extension namespace", example = "stateful")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "runme")
-            String extension,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "stateful") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "runme") String extension,
             @PathVariable
             @Parameter(
-                    description = "Target platform",
-                    example = TargetPlatform.NAME_LINUX_ARM64,
-                    schema = @Schema(type = "string", allowableValues = {
-                            NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                            NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                            NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                            NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                            NAME_WEB, NAME_UNIVERSAL
-                    })
-            )
-            String targetPlatform,
+                description = "Target platform",
+                example = TargetPlatform.NAME_LINUX_ARM64,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform,
             @RequestParam(defaultValue = "18")
             @Min(value = 0, message = "parameter must not be negative")
             @Max(value = 100, message = "parameter must not exceed 100")
-            @Parameter(description = "Maximal number of entries to return", schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18"))
-            int size,
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18")
+            ) int size,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "parameter must not be negative")
-            @Parameter(description = "Number of entries to skip (usually a multiple of the page size)", schema = @Schema(type = "integer", minimum = "0", defaultValue = "0"))
-            int offset
+            @Parameter(
+                description = "Number of entries to skip (usually a multiple of the page size)",
+                schema = @Schema(type = "integer", minimum = "0", defaultValue = "0")
+            ) int offset
     ) {
         return handleGetVersions(namespace, extension, targetPlatform, size, offset);
     }
 
-    private ResponseEntity<VersionsJson> handleGetVersions(String namespace, String extension, String targetPlatform, int size, int offset) {
+    private ResponseEntity<VersionsJson> handleGetVersions(
+            String namespace,
+            String extension,
+            String targetPlatform,
+            int size,
+            int offset
+    ) {
         for (var registry : getRegistries()) {
             try {
                 // allow to cache the response for upto 5 min and force clients to revalidate
@@ -487,90 +605,115 @@ public class RegistryAPI {
                 // Try the next registry
             }
         }
-        var json = VersionsJson.error(extensionNotFoundMessage(NamingUtil.toLogFormat(namespace, extension, targetPlatform)));
+        var json = VersionsJson
+                .error(extensionNotFoundMessage(NamingUtil.toLogFormat(namespace, extension, targetPlatform)));
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(json);
     }
 
     @GetMapping(
-            path = "/api/{namespace}/{extension}/version-references",
-            produces = MediaType.APPLICATION_JSON_VALUE
+        path = "/api/{namespace}/{extension}/version-references",
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
     @Operation(summary = "Provides a list of version references matching an extension")
     @ApiResponse(
-            responseCode = "200",
-            description = "The extension version references are returned in JSON format"
+        responseCode = "200",
+        description = "The extension version references are returned in JSON format"
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified extension could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified extension could not be found",
+        content = @Content()
     )
     public ResponseEntity<VersionReferencesJson> getVersionReferences(
-            @PathVariable @Parameter(description = "Extension namespace", example = "svelte")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "svelte-vscode")
-            String extension,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "svelte") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "svelte-vscode") String extension,
             @RequestParam(defaultValue = "18")
             @Min(value = 0, message = "parameter must not be negative")
             @Max(value = 100, message = "parameter must not exceed 100")
-            @Parameter(description = "Maximal number of entries to return", schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18"))
-            int size,
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18")
+            ) int size,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "parameter must not be negative")
-            @Parameter(description = "Number of entries to skip (usually a multiple of the page size)", schema = @Schema(type = "integer", minimum = "0", defaultValue = "0"))
-            int offset
+            @Parameter(
+                description = "Number of entries to skip (usually a multiple of the page size)",
+                schema = @Schema(type = "integer", minimum = "0", defaultValue = "0")
+            ) int offset
     ) {
         return handleGetVersionReferences(namespace, extension, null, size, offset);
     }
 
     @GetMapping(
-            path = "/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX + "}/version-references",
-            produces = MediaType.APPLICATION_JSON_VALUE
+        path = "/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX
+                + "}/version-references",
+        produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
     @Operation(summary = "Provides a list of version references matching an extension")
     @ApiResponse(
-            responseCode = "200",
-            description = "The extension version references are returned in JSON format"
+        responseCode = "200",
+        description = "The extension version references are returned in JSON format"
     )
     @ApiResponse(
-            responseCode = "404",
-            description = "The specified extension could not be found",
-            content = @Content()
+        responseCode = "404",
+        description = "The specified extension could not be found",
+        content = @Content()
     )
     public ResponseEntity<VersionReferencesJson> getVersionReferences(
-            @PathVariable @Parameter(description = "Extension namespace", example = "hashicorp")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "terraform")
-            String extension,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "hashicorp") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "terraform") String extension,
             @PathVariable
             @Parameter(
-                    description = "Target platform",
-                    example = TargetPlatform.NAME_LINUX_ARM64,
-                    schema = @Schema(type = "string", allowableValues = {
-                            NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                            NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                            NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                            NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                            NAME_WEB, NAME_UNIVERSAL
-                    })
-            )
-            String targetPlatform,
+                description = "Target platform",
+                example = TargetPlatform.NAME_LINUX_ARM64,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform,
             @RequestParam(defaultValue = "18")
             @Min(value = 0, message = "parameter must not be negative")
             @Max(value = 100, message = "parameter must not exceed 100")
-            @Parameter(description = "Maximal number of entries to return", schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18"))
-            int size,
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "0", maximum = "100", defaultValue = "18")
+            ) int size,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "parameter must not be negative")
-            @Parameter(description = "Number of entries to skip (usually a multiple of the page size)", schema = @Schema(type = "integer", minimum = "0", defaultValue = "0"))
-            int offset
+            @Parameter(
+                description = "Number of entries to skip (usually a multiple of the page size)",
+                schema = @Schema(type = "integer", minimum = "0", defaultValue = "0")
+            ) int offset
     ) {
         return handleGetVersionReferences(namespace, extension, targetPlatform, size, offset);
     }
 
-    private ResponseEntity<VersionReferencesJson> handleGetVersionReferences(String namespace, String extension, String targetPlatform, int size, int offset) {
+    private ResponseEntity<VersionReferencesJson> handleGetVersionReferences(
+            String namespace,
+            String extension,
+            String targetPlatform,
+            int size,
+            int offset
+    ) {
         for (var registry : getRegistries()) {
             try {
                 // allow to cache the response for upto 5 min and force clients to revalidate
@@ -582,7 +725,8 @@ public class RegistryAPI {
                 // Try the next registry
             }
         }
-        var json = VersionReferencesJson.error(extensionNotFoundMessage(NamingUtil.toLogFormat(namespace, extension, targetPlatform)));
+        var json = VersionReferencesJson
+                .error(extensionNotFoundMessage(NamingUtil.toLogFormat(namespace, extension, targetPlatform)));
         return ResponseEntity.status(HttpStatus.NOT_FOUND).body(json);
     }
 
@@ -610,12 +754,12 @@ public class RegistryAPI {
     )
     public ResponseEntity<StreamingResponseBody> getFile(
             HttpServletRequest request,
-            @PathVariable @Parameter(description = "Extension namespace", example = "astro-build")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "astro-vscode")
-            String extension,
-            @PathVariable @Parameter(description = "Extension version", example = "2.15.4")
-            String version
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "astro-build") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "astro-vscode") String extension,
+            @PathVariable
+            @Parameter(description = "Extension version", example = "2.15.4") String version
     ) {
         var fileName = UrlUtil.extractWildcardPath(request, "/api/{namespace}/{extension}/{version}/file/**");
         for (var registry : getRegistries()) {
@@ -629,7 +773,10 @@ public class RegistryAPI {
         return ResponseEntity.notFound().build();
     }
 
-    @GetMapping("/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX + "}/{version:" + VERSION_PATH_PARAM_REGEX + "}/file/**")
+    @GetMapping(
+        "/api/{namespace}/{extension}/{targetPlatform:" + TargetPlatform.NAMES_PATH_PARAM_REGEX + "}/{version:"
+                + VERSION_PATH_PARAM_REGEX + "}/file/**"
+    )
     @CrossOrigin
     @Operation(summary = "Access a file packaged by an extension")
     @ApiResponse(
@@ -653,27 +800,37 @@ public class RegistryAPI {
     )
     public ResponseEntity<StreamingResponseBody> getFile(
             HttpServletRequest request,
-            @PathVariable @Parameter(description = "Extension namespace", example = "AdaCore")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "ada")
-            String extension,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "AdaCore") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "ada") String extension,
             @PathVariable
             @Parameter(
                 description = "Target platform",
                 example = TargetPlatform.NAME_LINUX_ARM64,
-                schema = @Schema(type = "string", allowableValues = {
-                    NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                    NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                    NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                    NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                    NAME_WEB, NAME_UNIVERSAL
-                })
-            )
-            String targetPlatform,
-            @PathVariable @Parameter(description = "Extension version", example = "24.0.6")
-            String version
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform,
+            @PathVariable
+            @Parameter(description = "Extension version", example = "24.0.6") String version
     ) {
-        var fileName = UrlUtil.extractWildcardPath(request, "/api/{namespace}/{extension}/{targetPlatform}/{version}/file/**");
+        var fileName = UrlUtil
+                .extractWildcardPath(request, "/api/{namespace}/{extension}/{targetPlatform}/{version}/file/**");
         for (var registry : getRegistries()) {
             try {
                 return registry.getFile(namespace, extension, targetPlatform, version, fileName);
@@ -701,10 +858,10 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<ReviewListJson> getReviews(
-            @PathVariable @Parameter(description = "Extension namespace", example = "Prisma")
-            String namespace,
-            @PathVariable @Parameter(description = "Extension name", example = "prisma")
-            String extension
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "Prisma") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "prisma") String extension
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -740,44 +897,79 @@ public class RegistryAPI {
     )
     public ResponseEntity<SearchResultJson> search(
             @RequestParam(required = false)
-            @Parameter(description = "Query text for searching", example = "javascript")
-            String query,
+            @Parameter(description = "Query text for searching", example = "javascript") String query,
             @RequestParam(required = false)
-            @Parameter(description = "Extension category as shown in the UI", example = "Programming Languages")
-            String category,
+            @Parameter(
+                description = "Extension category as shown in the UI",
+                example = "Programming Languages"
+            ) String category,
             @RequestParam(required = false)
+            @Pattern(
+                regexp = TargetPlatform.NAMES_PARAM_REGEX,
+                message = "parameter must be a supported target platform"
+            )
             @Parameter(
                 description = "Target platform",
                 example = TargetPlatform.NAME_LINUX_ARM64,
-                schema = @Schema(type = "string", allowableValues = {
-                    NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                    NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                    NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                    NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                    NAME_WEB, NAME_UNIVERSAL
-                })
-            )
-            String targetPlatform,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform,
             @RequestParam(defaultValue = "18")
             @Min(value = 0, message = "parameter must not be negative")
             @Max(value = 1000, message = "parameter must not exceed 1000")
-            @Parameter(description = "Maximal number of entries to return", schema = @Schema(type = "integer", minimum = "0", maximum = "1000", defaultValue = "18"))
-            int size,
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "0", maximum = "1000", defaultValue = "18")
+            ) int size,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "parameter must not be negative")
-            @Parameter(description = "Number of entries to skip (usually a multiple of the page size)", schema = @Schema(type = "integer", minimum = "0", defaultValue = "0"))
-            int offset,
-            @RequestParam(defaultValue = "desc") 
-            @Parameter(description = "Descending or ascending sort order", schema = @Schema(type = "string", allowableValues = {"asc", "desc"}))
-            String sortOrder,
+            @Parameter(
+                description = "Number of entries to skip (usually a multiple of the page size)",
+                schema = @Schema(type = "integer", minimum = "0", defaultValue = "0")
+            ) int offset,
+            @RequestParam(defaultValue = "desc")
+            @Parameter(
+                description = "Descending or ascending sort order",
+                schema = @Schema(type = "string", allowableValues = { "asc", "desc" })
+            ) String sortOrder,
             @RequestParam(defaultValue = SortBy.RELEVANCE)
-            @Parameter(description = "Sort key (relevance is a weighted mix of various properties)", schema = @Schema(type = "string", allowableValues = {SortBy.RELEVANCE, SortBy.TIMESTAMP, SortBy.RATING, SortBy.DOWNLOADS}))
-            String sortBy,
+            @Parameter(
+                description = "Sort key (relevance is a weighted mix of various properties)",
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = { SortBy.RELEVANCE, SortBy.TIMESTAMP, SortBy.RATING, SortBy.DOWNLOADS }
+                )
+            ) String sortBy,
             @RequestParam(defaultValue = "false")
-            @Parameter(description = "Whether to include information on all available versions for each returned entry")
-            boolean includeAllVersions
+            @Parameter(
+                description = "Whether to include information on all available versions for each returned entry"
+            ) boolean includeAllVersions
     ) {
-        var options = new ISearchService.Options(query, category, targetPlatform, size, offset, sortOrder, sortBy, includeAllVersions, null);
+        var options = new ISearchService.Options(
+                query,
+                category,
+                targetPlatform,
+                size,
+                offset,
+                sortOrder,
+                sortBy,
+                includeAllVersions,
+                null);
         var resultOffset = 0;
         var resultSize = 0;
         var resultExtensions = new ArrayList<SearchEntryJson>(size);
@@ -787,7 +979,7 @@ public class RegistryAPI {
             }
             try {
                 var subResult = registry.search(options);
-                if(resultExtensions.isEmpty() && subResult.getExtensions() != null) {
+                if (resultExtensions.isEmpty() && subResult.getExtensions() != null) {
                     resultExtensions.addAll(subResult.getExtensions());
                 } else if (subResult.getExtensions() != null && !subResult.getExtensions().isEmpty()) {
                     int limit = size - resultExtensions.size();
@@ -809,17 +1001,21 @@ public class RegistryAPI {
         result.setExtensions(resultExtensions);
         return ResponseEntity.ok()
                 // do not cache to avoid stale data, elasticsearch in general is fast
-                .cacheControl(CacheControl.noCache().cachePublic().mustRevalidate())
+                .cacheControl(CacheControl.noCache().cachePublic())
                 .body(result);
     }
 
     private int mergeSearchResults(List<SearchEntryJson> extensions, List<SearchEntryJson> entries, int limit) {
-        var previousResult = Iterables.limit(extensions, extensions.size());
+        var previousSize = extensions.size();
         var entriesIter = entries.iterator();
         int mergedEntries = 0;
         while (entriesIter.hasNext() && extensions.size() < limit) {
             var next = entriesIter.next();
-            if (!Iterables.any(previousResult, ext -> ext.getNamespace().equals(next.getNamespace()) && ext.getName().equals(next.getName()))) {
+            if (extensions.stream()
+                    .limit(previousSize)
+                    .noneMatch(
+                            ext -> ext.getNamespace().equals(next.getNamespace())
+                                    && ext.getName().equals(next.getName()))) {
                 extensions.add(next);
                 mergedEntries++;
             }
@@ -843,51 +1039,74 @@ public class RegistryAPI {
     )
     public ResponseEntity<QueryResultJson> getQueryV2(
             @RequestParam(required = false)
-            @Parameter(description = "Name of a namespace", example = "foo")
-            String namespaceName,
+            @Parameter(description = "Name of a namespace", example = "foo") String namespaceName,
             @RequestParam(required = false)
-            @Parameter(description = "Name of an extension", example = "bar")
-            String extensionName,
+            @Parameter(description = "Name of an extension", example = "bar") String extensionName,
             @RequestParam(required = false)
-            @Parameter(description = "Version of an extension", example = "1")
-            String extensionVersion,
+            @Parameter(description = "Version of an extension", example = "1") String extensionVersion,
             @RequestParam(required = false)
-            @Parameter(description = "Identifier in the format {namespace}.{extension}", example = "foo.bar")
-            String extensionId,
+            @Parameter(
+                description = "Identifier in the format {namespace}.{extension}",
+                example = "foo.bar"
+            ) String extensionId,
             @RequestParam(required = false)
-            @Parameter(description = "Universally unique identifier of an extension", example = "5678")
-            String extensionUuid,
+            @Parameter(
+                description = "Universally unique identifier of an extension",
+                example = "5678"
+            ) String extensionUuid,
             @RequestParam(required = false)
-            @Parameter(description = "Universally unique identifier of a namespace", example = "1234")
-            String namespaceUuid,
+            @Parameter(
+                description = "Universally unique identifier of a namespace",
+                example = "1234"
+            ) String namespaceUuid,
             @RequestParam(defaultValue = "links")
             @Parameter(
-                    description = "Whether to include all versions of an extension",
-                    schema = @Schema(type = "string", allowableValues = { "true", "false", "links" }, defaultValue = "links")
-            )
-            String includeAllVersions,
+                description = "Whether to include all versions of an extension",
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = { "true", "false", "links" },
+                    defaultValue = "links"
+                )
+            ) String includeAllVersions,
             @RequestParam(required = false)
-            @Parameter(
-                    description = "Target platform",
-                    example = TargetPlatform.NAME_LINUX_X64,
-                    schema = @Schema(type = "string", allowableValues = {
-                    NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                    NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                    NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                    NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                    NAME_WEB, NAME_UNIVERSAL
-                })
+            @Pattern(
+                regexp = TargetPlatform.NAMES_PARAM_REGEX,
+                message = "parameter must be a supported target platform"
             )
-            String targetPlatform,
+            @Parameter(
+                description = "Target platform",
+                example = TargetPlatform.NAME_LINUX_X64,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform,
             @RequestParam(defaultValue = "100")
             @Min(value = 0, message = "parameter must not be negative")
             @Max(value = 1000, message = "parameter must not exceed 1000")
-            @Parameter(description = "Maximal number of entries to return", schema = @Schema(type = "integer", minimum = "0", maximum = "1000", defaultValue = "100"))
-            int size,
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "0", maximum = "1000", defaultValue = "100")
+            ) int size,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "parameter must not be negative")
-            @Parameter(description = "Number of entries to skip (usually a multiple of the page size)", schema = @Schema(type = "integer", minimum = "0", defaultValue = "0"))
-            int offset
+            @Parameter(
+                description = "Number of entries to skip (usually a multiple of the page size)",
+                schema = @Schema(type = "integer", minimum = "0", defaultValue = "0")
+            ) int offset
     ) {
         if (!List.of("true", "false", "links").contains(includeAllVersions)) {
             var json = QueryResultJson.error("Invalid includeAllVersions value: " + includeAllVersions + ".");
@@ -904,8 +1123,7 @@ public class RegistryAPI {
                 includeAllVersions,
                 targetPlatform,
                 size,
-                offset
-        );
+                offset);
 
         var resultSize = 0;
         var resultOffset = request.offset();
@@ -913,7 +1131,7 @@ public class RegistryAPI {
         for (var registry : getRegistries()) {
             try {
                 var subResult = registry.queryV2(request);
-                if(resultExtensions.isEmpty() && subResult.getExtensions() != null) {
+                if (resultExtensions.isEmpty() && subResult.getExtensions() != null) {
                     resultExtensions.addAll(subResult.getExtensions());
                 } else if (subResult.getExtensions() != null && !subResult.getExtensions().isEmpty()) {
                     int limit = size - resultExtensions.size();
@@ -954,53 +1172,76 @@ public class RegistryAPI {
         description = "The request contains an invalid parameter value",
         content = @Content(
             mediaType = MediaType.APPLICATION_JSON_VALUE,
-            examples = @ExampleObject(value = "{\"error\":\"The 'extensionId' parameter must have the format 'namespace.extension'.\"}")
+            examples = @ExampleObject(
+                value = "{\"error\":\"The 'extensionId' parameter must have the format 'namespace.extension'.\"}"
+            )
         )
     )
     public ResponseEntity<QueryResultJson> getQuery(
             @RequestParam(required = false)
-            @Parameter(description = "Name of a namespace", example = "foo")
-            String namespaceName,
+            @Parameter(description = "Name of a namespace", example = "foo") String namespaceName,
             @RequestParam(required = false)
-            @Parameter(description = "Name of an extension", example = "bar")
-            String extensionName,
+            @Parameter(description = "Name of an extension", example = "bar") String extensionName,
             @RequestParam(required = false)
-            @Parameter(description = "Version of an extension", example = "1")
-            String extensionVersion,
+            @Parameter(description = "Version of an extension", example = "1") String extensionVersion,
             @RequestParam(required = false)
-            @Parameter(description = "Identifier in the format {namespace}.{extension}", example = "foo.bar")
-            String extensionId,
+            @Parameter(
+                description = "Identifier in the format {namespace}.{extension}",
+                example = "foo.bar"
+            ) String extensionId,
             @RequestParam(required = false)
-            @Parameter(description = "Universally unique identifier of an extension", example = "5678")
-            String extensionUuid,
+            @Parameter(
+                description = "Universally unique identifier of an extension",
+                example = "5678"
+            ) String extensionUuid,
             @RequestParam(required = false)
-            @Parameter(description = "Universally unique identifier of a namespace", example = "1234")
-            String namespaceUuid,
+            @Parameter(
+                description = "Universally unique identifier of a namespace",
+                example = "1234"
+            ) String namespaceUuid,
             @RequestParam(defaultValue = "false")
-            @Parameter(description = "Whether to include all versions of an extension, ignored if extensionVersion is specified")
-            boolean includeAllVersions,
+            @Parameter(
+                description = "Whether to include all versions of an extension, ignored if extensionVersion is specified"
+            ) boolean includeAllVersions,
             @RequestParam(required = false)
+            @Pattern(
+                regexp = TargetPlatform.NAMES_PARAM_REGEX,
+                message = "parameter must be a supported target platform"
+            )
             @Parameter(
                 description = "Target platform",
                 example = TargetPlatform.NAME_LINUX_X64,
-                schema = @Schema(type = "string", allowableValues = {
-                    NAME_WIN32_X64, NAME_WIN32_IA32, NAME_WIN32_ARM64,
-                    NAME_LINUX_X64, NAME_LINUX_ARM64, NAME_LINUX_ARMHF,
-                    NAME_ALPINE_X64, NAME_ALPINE_ARM64,
-                    NAME_DARWIN_X64, NAME_DARWIN_ARM64,
-                    NAME_WEB, NAME_UNIVERSAL
-                })
-            )
-            String targetPlatform,
+                schema = @Schema(
+                    type = "string",
+                    allowableValues = {
+                        NAME_WIN32_X64,
+                        NAME_WIN32_IA32,
+                        NAME_WIN32_ARM64,
+                        NAME_LINUX_X64,
+                        NAME_LINUX_ARM64,
+                        NAME_LINUX_ARMHF,
+                        NAME_ALPINE_X64,
+                        NAME_ALPINE_ARM64,
+                        NAME_DARWIN_X64,
+                        NAME_DARWIN_ARM64,
+                        NAME_WEB,
+                        NAME_UNIVERSAL
+                    }
+                )
+            ) String targetPlatform,
             @RequestParam(defaultValue = "100")
             @Min(value = 0, message = "parameter must not be negative")
             @Max(value = 1000, message = "parameter must not exceed 1000")
-            @Parameter(description = "Maximal number of entries to return", schema = @Schema(type = "integer", minimum = "0", maximum = "1000", defaultValue = "100"))
-            int size,
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "0", maximum = "1000", defaultValue = "100")
+            ) int size,
             @RequestParam(defaultValue = "0")
             @Min(value = 0, message = "parameter must not be negative")
-            @Parameter(description = "Number of entries to skip (usually a multiple of the page size)", schema = @Schema(type = "integer", minimum = "0", defaultValue = "0"))
-            int offset
+            @Parameter(
+                description = "Number of entries to skip (usually a multiple of the page size)",
+                schema = @Schema(type = "integer", minimum = "0", defaultValue = "0")
+            ) int offset
     ) {
         var request = new QueryRequest(
                 namespaceName,
@@ -1012,8 +1253,7 @@ public class RegistryAPI {
                 includeAllVersions,
                 targetPlatform,
                 size,
-                offset
-        );
+                offset);
 
         var resultSize = 0;
         var resultOffset = request.offset();
@@ -1021,7 +1261,7 @@ public class RegistryAPI {
         for (var registry : getRegistries()) {
             try {
                 var subResult = registry.query(request);
-                if(resultExtensions.isEmpty() && subResult.getExtensions() != null) {
+                if (resultExtensions.isEmpty() && subResult.getExtensions() != null) {
                     resultExtensions.addAll(subResult.getExtensions());
                 } else if (subResult.getExtensions() != null && !subResult.getExtensions().isEmpty()) {
                     int limit = size - resultExtensions.size();
@@ -1048,12 +1288,16 @@ public class RegistryAPI {
     }
 
     private int mergeQueryResults(List<ExtensionJson> extensions, List<ExtensionJson> entries, int limit) {
-        var previousResult = Iterables.limit(extensions, extensions.size());
+        var previousSize = extensions.size();
         var entriesIter = entries.iterator();
         int mergedEntries = 0;
         while (entriesIter.hasNext() && extensions.size() < limit) {
             var next = entriesIter.next();
-            if (!Iterables.any(previousResult, ext -> ext.getNamespace().equals(next.getNamespace()) && ext.getName().equals(next.getName()))) {
+            if (extensions.stream()
+                    .limit(previousSize)
+                    .noneMatch(
+                            ext -> ext.getNamespace().equals(next.getNamespace())
+                                    && ext.getName().equals(next.getName()))) {
                 extensions.add(next);
                 mergedEntries++;
             }
@@ -1067,14 +1311,18 @@ public class RegistryAPI {
         produces = MediaType.APPLICATION_JSON_VALUE
     )
     @CrossOrigin
-    @Operation(summary = "Provides metadata of extensions matching the given parameters. Deprecated: use GET /api/-/query instead.", deprecated = true)
+    @Operation(
+        summary = "Provides metadata of extensions matching the given parameters. Deprecated: use GET /api/-/query instead.",
+        deprecated = true
+    )
     @ApiResponse(
         responseCode = "301",
         description = "Returns redirect to GET /api/-/query."
     )
     public ResponseEntity<QueryResultJson> postQuery(
-            @RequestBody @Parameter(description = "Parameters of the metadata query")
-            QueryParamJson param
+            @Valid
+            @RequestBody
+            @Parameter(description = "Parameters of the metadata query") QueryParamJson param
     ) {
         var location = UrlUtil.createApiUrl(UrlUtil.getBaseUrl(), "api", "-", "query");
         location = UrlUtil.addQuery(location, param.toQueryParams());
@@ -1114,11 +1362,13 @@ public class RegistryAPI {
             examples = @ExampleObject(value = "{ \"error\": \"Invalid access token.\" }")
         )
     )
+    @SecurityRequirement(name = "bearerAuth")
     public ResponseEntity<ResultJson> createNamespace(
-            @RequestBody @Parameter(description = "Describes the namespace to create")
-            NamespaceJson namespace,
-            @RequestParam @Parameter(description = "A personal access token")
-            String token
+            HttpServletRequest request,
+            @RequestBody
+            @Parameter(description = "Describes the namespace to create") NamespaceJson namespace,
+            @RequestParam(required = false)
+            @Parameter(description = TOKEN_PARAM_DESCRIPTION, deprecated = true) String token
     ) {
         if (namespace == null) {
             return ResponseEntity.ok(ResultJson.error(NO_JSON_INPUT));
@@ -1126,8 +1376,9 @@ public class RegistryAPI {
         if (StringUtils.isEmpty(namespace.getName())) {
             return ResponseEntity.ok(ResultJson.error("Missing required property 'name'."));
         }
+        var tokenValue = HttpHeadersUtil.resolveAccessToken(request, token);
         try {
-            var json = local.createNamespace(namespace, token);
+            var json = local.createNamespace(namespace, tokenValue);
             var serverUrl = UrlUtil.getBaseUrl();
             var url = UrlUtil.createApiUrl(serverUrl, "api", namespace.getName());
             return ResponseEntity.status(HttpStatus.CREATED)
@@ -1147,7 +1398,10 @@ public class RegistryAPI {
         summary = "Create a namespace",
         requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
             description = "Describes the namespace to create",
-            content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = NamespaceJson.class)),
+            content = @Content(
+                mediaType = MediaType.APPLICATION_JSON_VALUE,
+                schema = @Schema(implementation = NamespaceJson.class)
+            ),
             required = true
         )
     )
@@ -1158,7 +1412,7 @@ public class RegistryAPI {
         content = @Content(
             mediaType = MediaType.APPLICATION_JSON_VALUE,
             schema = @Schema(implementation = ResultJson.class),
-            examples = @ExampleObject(value="{ \"success\": \"Created namespace foobar\" }")
+            examples = @ExampleObject(value = "{ \"success\": \"Created namespace foobar\" }")
         ),
         headers = @Header(
             name = "Location",
@@ -1172,11 +1426,11 @@ public class RegistryAPI {
         content = @Content(
             mediaType = MediaType.APPLICATION_JSON_VALUE,
             schema = @Schema(implementation = ResultJson.class),
-            examples = @ExampleObject(value="{ \"error\": \"Invalid access token.\" }")
+            examples = @ExampleObject(value = "{ \"error\": \"Invalid access token.\" }")
         )
     )
     @ApiResponse(
-        responseCode = "403",
+        responseCode = "401",
         description = "User is not logged in",
         content = @Content(schema = @Schema(implementation = ResultJson.class))
     )
@@ -1185,7 +1439,7 @@ public class RegistryAPI {
     ) {
         var user = users.findLoggedInUser();
         if (user == null) {
-            throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
         }
 
         if (namespace == null) {
@@ -1215,7 +1469,10 @@ public class RegistryAPI {
         summary = "Publish an extension by uploading a vsix file",
         requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
             description = "Uploaded vsix file to publish",
-            content = @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE, schema = @Schema(type = "string", format = "binary")),
+            content = @Content(
+                mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE,
+                schema = @Schema(type = "string", format = "binary")
+            ),
             required = true
         )
     )
@@ -1234,15 +1491,33 @@ public class RegistryAPI {
         description = "The extension could not be published",
         content = @Content(
             mediaType = MediaType.APPLICATION_JSON_VALUE,
+            examples = @ExampleObject(value = "{ \"error\": \"Unknown publisher: foobar\" }")
+        )
+    )
+    @ApiResponse(
+        responseCode = "401",
+        description = "The token is missing, invalid or expired",
+        content = @Content(
+            mediaType = MediaType.APPLICATION_JSON_VALUE,
             examples = @ExampleObject(value = "{ \"error\": \"Invalid access token.\" }")
         )
     )
+    @ApiResponse(
+        responseCode = "403",
+        description = "The token is valid but has no publishing permission in the namespace, "
+                + "or the user has not signed a Publisher Agreement",
+        content = @Content(schema = @Schema(implementation = ResultJson.class))
+    )
+    @SecurityRequirement(name = "bearerAuth")
     public ResponseEntity<ExtensionJson> publish(
+            HttpServletRequest request,
             InputStream content,
-            @RequestParam @Parameter(description = "A personal access token") String token
+            @RequestParam(required = false)
+            @Parameter(description = TOKEN_PARAM_DESCRIPTION, deprecated = true) String token
     ) {
+        var tokenValue = HttpHeadersUtil.resolveAccessToken(request, token);
         try {
-            var json = local.publish(content, token);
+            var json = local.publish(content, tokenValue);
             var serverUrl = UrlUtil.getBaseUrl();
             var url = UrlUtil.createApiVersionUrl(serverUrl, json);
             return ResponseEntity.status(HttpStatus.CREATED)
@@ -1263,7 +1538,10 @@ public class RegistryAPI {
         summary = "Publish an extension by uploading a vsix file",
         requestBody = @io.swagger.v3.oas.annotations.parameters.RequestBody(
             description = "Uploaded vsix file to publish",
-            content = @Content(mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE, schema = @Schema(type = "string", format = "binary")),
+            content = @Content(
+                mediaType = MediaType.APPLICATION_OCTET_STREAM_VALUE,
+                schema = @Schema(type = "string", format = "binary")
+            ),
             required = true
         )
     )
@@ -1282,21 +1560,25 @@ public class RegistryAPI {
         description = "The extension could not be published",
         content = @Content(
             mediaType = MediaType.APPLICATION_JSON_VALUE,
-            examples = @ExampleObject(value="{ \"error\": \"Unknown publisher: foobar\" }")
+            examples = @ExampleObject(value = "{ \"error\": \"Unknown publisher: foobar\" }")
         )
     )
     @ApiResponse(
-        responseCode = "403",
+        responseCode = "401",
         description = "User is not logged in"
+    )
+    @ApiResponse(
+        responseCode = "403",
+        description = "User has no publishing permission in the namespace, or has not signed a Publisher Agreement"
     )
     public ResponseEntity<ExtensionJson> publish(InputStream content) {
         try {
             var user = users.findLoggedInUser();
             if (user == null) {
-                throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+                throw new ResponseStatusException(HttpStatus.UNAUTHORIZED);
             }
 
-            var json = local.publish(content, user);
+            var json = local.publish(content, new LoggedInAuthentication(user));
             var serverUrl = UrlUtil.getBaseUrl();
             var url = UrlUtil.createApiUrl(serverUrl, "api", json.getNamespace(), json.getName(), json.getVersion());
             return ResponseEntity.status(HttpStatus.CREATED)
@@ -1305,6 +1587,93 @@ public class RegistryAPI {
         } catch (ErrorResultException exc) {
             logger.warn("Failed to publish extension: {}", exc.getMessage());
             return exc.toResponseEntity(ExtensionJson.class);
+        }
+    }
+
+    @PostMapping(
+        path = "/api/{namespace}/{extension}/delete",
+        produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @Operation(
+        summary = "Delete an extension or some of its versions",
+        description = """
+                Deletes extension versions on behalf of the user the personal access token belongs to. \
+                Only members of the namespace may delete: owners may delete any version, other members \
+                only the versions they published themselves.
+
+                Provide a list of target platform versions to delete; an entry without target platform \
+                selects every target platform of that version. Set `allVersions` to delete the extension \
+                as a whole instead, i.e. every version the token's user is allowed to delete.
+
+                Deleted versions are permanently reserved: their files are removed and they can never be \
+                published again."""
+    )
+    @MutatingOperation
+    @ApiResponse(
+        responseCode = "200",
+        description = "The extension versions were deleted",
+        content = @Content(schema = @Schema(implementation = ResultJson.class))
+    )
+    @ApiResponse(
+        responseCode = "400",
+        description = "The extension versions could not be deleted",
+        content = @Content(
+            mediaType = MediaType.APPLICATION_JSON_VALUE,
+            examples = @ExampleObject(value = "{ \"error\": \"Invalid access token.\" }")
+        )
+    )
+    @ApiResponse(
+        responseCode = "403",
+        description = "The token's user is not a member of the namespace",
+        content = @Content(
+            mediaType = MediaType.APPLICATION_JSON_VALUE,
+            examples = @ExampleObject(value = "{ \"error\": \"Insufficient access rights for namespace: foo\" }")
+        )
+    )
+    @ApiResponse(
+        responseCode = "404",
+        description = "The specified extension or version could not be found",
+        content = @Content(
+            mediaType = MediaType.APPLICATION_JSON_VALUE,
+            examples = @ExampleObject(value = "{ \"error\": \"Extension not found: foo.bar\" }")
+        )
+    )
+    @SecurityRequirement(name = "bearerAuth")
+    public ResponseEntity<ResultJson> deleteExtension(
+            HttpServletRequest request,
+            @PathVariable
+            @Parameter(description = "Extension namespace", example = "redhat") String namespace,
+            @PathVariable
+            @Parameter(description = "Extension name", example = "java") String extension,
+            @RequestBody(required = false) List<TargetPlatformVersionJson> targetVersions,
+            @RequestParam(required = false, defaultValue = "false")
+            @Parameter(description = "Delete all versions of the extension") boolean allVersions,
+            @RequestParam(required = false)
+            @Parameter(description = TOKEN_PARAM_DESCRIPTION, deprecated = true) String token
+    ) {
+        var tokenValue = HttpHeadersUtil.resolveAccessToken(request, token);
+        try {
+            if (allVersions && targetVersions != null && !targetVersions.isEmpty()) {
+                var json = ResultJson
+                        .error("Specify either the versions to delete or 'allVersions', but not both.");
+                return new ResponseEntity<>(json, HttpStatus.BAD_REQUEST);
+            }
+            if (!allVersions && targetVersions == null) {
+                var json = ResultJson
+                        .error("No versions specified. Provide the versions to delete or set 'allVersions'.");
+                return new ResponseEntity<>(json, HttpStatus.BAD_REQUEST);
+            }
+            if (targetVersions != null
+                    && targetVersions.stream().anyMatch(target -> StringUtils.isBlank(target.version()))) {
+                var json = ResultJson.error("Missing 'version' for a requested target platform version to delete.");
+                return new ResponseEntity<>(json, HttpStatus.BAD_REQUEST);
+            }
+
+            // null tells the service to delete every version the token's user is allowed to delete
+            var versions = allVersions ? null : targetVersions;
+            return ResponseEntity.ok(local.deleteExtension(namespace, extension, versions, tokenValue));
+        } catch (ErrorResultException exc) {
+            return exc.toResponseEntity();
         }
     }
 
@@ -1360,6 +1729,212 @@ public class RegistryAPI {
     }
 
     @GetMapping(
+        path = "/api/-/version-changes",
+        produces = MediaType.APPLICATION_JSON_VALUE
+    )
+    @CrossOrigin
+    @PreviewOperation
+    @Operation(
+        summary = "Provides a paginated feed of the publicly visible transitions of extension versions",
+        // Rendered as CommonMark by Swagger UI, so the structure below is what a reader sees.
+        description = """
+                Each entry reports one transition of a single extension version, ordered by the instant \
+                it happened, oldest first. A version that transitions repeatedly is reported once per \
+                transition rather than as a single entry that moves around, so that nothing is missed \
+                between two requests.
+
+                ### Reported states
+
+                - **`ACTIVE`** -- the version is publicly available.
+                - **`INACTIVE`** -- the version is not publicly available. Its files are still there and \
+                it can become `ACTIVE` again.
+                - **`REMOVED`** -- the version is no longer available for download. Reported both for a \
+                version that was deleted and for one that was permanently purged, as either way the \
+                version is gone.
+
+                ### Transitions
+
+                | From | To | Reported when |
+                | --- | --- | --- |
+                | _not in the feed_ | `ACTIVE` | the version was published and became publicly available |
+                | `ACTIVE` | `INACTIVE` | the version was deactivated administratively, for instance \
+                because the publisher's contributions were revoked or their publisher agreement is no \
+                longer signed |
+                | `INACTIVE` | `ACTIVE` | the version was reinstated and is publicly available again |
+                | `ACTIVE`, `INACTIVE` | `REMOVED` | the version was deleted or purged |
+                | `REMOVED` | `ACTIVE` | the version had been purged, freeing its identity, and the same \
+                version was published again |
+
+                A deleted version keeps its identity permanently reserved as a tombstone and can never be \
+                published again, so `REMOVED` is the last entry it ever gets. An administrator can purge \
+                it instead, which drops that tombstone and frees the identity: the same namespace, \
+                extension, version and target platform can then be published again and continue in the \
+                feed with a fresh `ACTIVE` entry. `REMOVED` is therefore the current state of the \
+                coordinates an entry names, not a guarantee that they will never come back.
+
+                Two consecutive entries for the same version never report the same state. The instant a \
+                version became publicly available can be much later than the `timestamp` it was \
+                published at, for instance when activation waited on a scan.
+
+                ### Following the registry
+
+                Every response carries a `nextCursor`, the position of its last entry. Pass it back as \
+                `after` and the next response continues exactly where the previous one ended:
+
+                1. Request the feed, leaving `after` out on the very first request.
+                2. Process the entries in order.
+                3. Store `nextCursor` and pass it as `after` on the next request.
+                4. While `hasMore` is `true` there are further entries waiting, so request the next page \
+                straight away rather than waiting for the next poll.
+
+                The same loop serves a first full synchronisation, an hourly poll and a catch-up after \
+                days of downtime, and it neither repeats nor skips an entry in any of them. Storing \
+                `nextCursor` only after the entries have been processed means a consumer that dies \
+                mid-page reprocesses that page rather than losing it.
+
+                A cursor is an opaque position in the feed, not a timestamp: it also identifies which of \
+                the transitions sharing an instant have been processed, which a timestamp cannot. Do not \
+                construct or parse one, and do not follow the feed by passing an entry's `lastUpdated` \
+                as `since` -- `since` is inclusive, so it reports the entries sharing that instant again, \
+                and no exclusive variant of it could avoid that without skipping entries instead.
+
+                ### Notes
+
+                - `since` and `until` bound the range a request is interested in and are meant for \
+                one-off queries. Combining `since` with `after` is rejected, as the two disagree about \
+                where the response starts; `until` combines with `after` to catch up to a fixed end.
+                - Entries are only ever appended and are never updated or reordered, so a cursor stays \
+                valid indefinitely.
+                - The feed stops short of the present by a small margin, so a transition is reported a \
+                little after it happened rather than instantly. This is what lets a consumer that has \
+                caught up be sure it has missed nothing: an entry is only reported once the transaction \
+                recording it is certain to have committed. Requesting an `until` closer to the present \
+                than that reports nothing beyond the margin rather than skipping those entries -- they \
+                turn up on a later request.
+                - Only changes in availability are reported. Editing the metadata of a version, such as \
+                its readme or its tags, is not a transition and produces no entry.
+                - Responses may be cached for up to one minute. Polling faster than that gains a \
+                consumer nothing.
+                """
+    )
+    @ApiResponse(
+        responseCode = "200",
+        description = "The changes are returned in JSON format",
+        content = @Content(
+            mediaType = MediaType.APPLICATION_JSON_VALUE,
+            examples = @ExampleObject(value = """
+                    {
+                      "changes": [
+                        {
+                          "namespace": "redhat",
+                          "name": "java",
+                          "version": "1.30.0",
+                          "targetPlatform": "universal",
+                          "state": "ACTIVE",
+                          "timestamp": "2026-01-14T09:12:33Z",
+                          "lastUpdated": "2026-01-14T09:12:33Z",
+                          "url": "https://open-vsx.org/api/redhat/java/universal/1.30.0"
+                        },
+                        {
+                          "namespace": "redhat",
+                          "name": "java",
+                          "version": "1.29.0",
+                          "targetPlatform": "universal",
+                          "state": "REMOVED",
+                          "timestamp": "2025-11-02T16:40:05Z",
+                          "lastUpdated": "2026-01-14T09:30:11Z",
+                          "url": "https://open-vsx.org/api/redhat/java/universal/1.29.0"
+                        }
+                      ],
+                      "nextCursor": "MjAyNi0wMS0xNFQwOTozMDoxMV8xMjM0",
+                      "hasMore": false
+                    }""")
+        )
+    )
+    @ApiResponse(
+        responseCode = "400",
+        description = "The request contains an invalid parameter value",
+        content = @Content(
+            mediaType = MediaType.APPLICATION_JSON_VALUE,
+            examples = @ExampleObject(value = "{\"error\": \"Invalid 'since' parameter: yesterday\"}")
+        )
+    )
+    public ResponseEntity<ChangesResultJson> getChanges(
+            @RequestParam(required = false)
+            @Parameter(
+                description = "Continue after this position in the feed, as reported by the 'nextCursor' "
+                        + "of a previous response. Cannot be combined with 'since'.",
+                example = "MjAyNi0wMS0xNFQwOTozMDoxMV8xMjM0"
+            ) String after,
+            @RequestParam(required = false)
+            @Parameter(
+                description = "Only include entries at or after this date and time (ISO-8601). Meant for "
+                        + "one-off queries; use 'after' to follow the feed.",
+                example = "2026-01-01T00:00:00Z"
+            ) String since,
+            @RequestParam(required = false)
+            @Parameter(
+                description = "Only include entries before this date and time, exclusive (ISO-8601)",
+                example = "2026-02-01T00:00:00Z"
+            ) String until,
+            @RequestParam(defaultValue = "100")
+            @Min(value = 1, message = "parameter must be positive")
+            @Max(value = 1000, message = "parameter must not exceed 1000")
+            @Parameter(
+                description = "Maximal number of entries to return",
+                schema = @Schema(type = "integer", minimum = "1", maximum = "1000", defaultValue = "100")
+            ) int size
+    ) {
+        // The two disagree about where the response starts, and silently letting one win would leave a
+        // consumer that passed both believing it is following the feed when it is not.
+        if (after != null && since != null) {
+            return ResponseEntity.badRequest()
+                    .body(ChangesResultJson.error("The 'after' and 'since' parameters cannot be combined"));
+        }
+
+        ChangesCursor cursor;
+        try {
+            cursor = after == null ? null : ChangesCursor.decode(after);
+        } catch (IllegalArgumentException exc) {
+            return ResponseEntity.badRequest().body(ChangesResultJson.error("Invalid 'after' parameter: " + after));
+        }
+
+        LocalDateTime sinceDate;
+        LocalDateTime untilDate;
+        try {
+            sinceDate = parseTimestamp(since);
+        } catch (DateTimeParseException exc) {
+            return ResponseEntity.badRequest().body(ChangesResultJson.error("Invalid 'since' parameter: " + since));
+        }
+        try {
+            untilDate = parseTimestamp(until);
+        } catch (DateTimeParseException exc) {
+            return ResponseEntity.badRequest().body(ChangesResultJson.error("Invalid 'until' parameter: " + until));
+        }
+
+        // Entries are only ever appended and never reordered, so a cursor stays valid indefinitely and a
+        // response can be cached. Polling faster than the cache period gains a consumer nothing.
+        return ResponseEntity.ok()
+                .cacheControl(CacheControl.maxAge(1, TimeUnit.MINUTES).cachePublic())
+                .body(local.getChanges(sinceDate, untilDate, cursor, size));
+    }
+
+    /**
+     * Parses an ISO-8601 date and time into the UTC date and time the registry stores. An explicit
+     * offset is honoured, a timestamp given without one is taken to be UTC already.
+     */
+    private LocalDateTime parseTimestamp(String value) {
+        if (StringUtils.isEmpty(value)) {
+            return null;
+        }
+        try {
+            return OffsetDateTime.parse(value).withOffsetSameInstant(ZoneOffset.UTC).toLocalDateTime();
+        } catch (DateTimeParseException exc) {
+            return LocalDateTime.parse(value);
+        }
+    }
+
+    @GetMapping(
         path = "/api/-/public-key/{publicId}",
         produces = MediaType.TEXT_PLAIN_VALUE
     )
@@ -1375,8 +1950,11 @@ public class RegistryAPI {
         content = @Content()
     )
     public ResponseEntity<String> getPublicKey(
-            @PathVariable @Parameter(description = "Public ID of a public key file", example = "92dea4de-80b5-4577-b27d-44cdcda82c63")
-            String publicId
+            @PathVariable
+            @Parameter(
+                description = "Public ID of a public key file",
+                example = "92dea4de-80b5-4577-b27d-44cdcda82c63"
+            ) String publicId
     ) {
         for (var registry : getRegistries()) {
             try {
@@ -1403,11 +1981,11 @@ public class RegistryAPI {
         responseCode = "404",
         description = "The registry version could not be determined"
     )
-    public ResponseEntity<RegistryVersionJson> getServerVersion() {
+    public ResponseEntity<RegistryVersionJson> getRegistryVersion() {
         try {
             return ResponseEntity.ok()
-                        .cacheControl(CacheControl.maxAge(5, TimeUnit.MINUTES).cachePublic().mustRevalidate())
-                        .body(local.getRegistryVersion());
+                    .cacheControl(CacheControl.maxAge(5, TimeUnit.MINUTES).cachePublic().mustRevalidate())
+                    .body(local.getRegistryVersion());
         } catch (ErrorResultException exc) {
             return exc.toResponseEntity(RegistryVersionJson.class);
         }

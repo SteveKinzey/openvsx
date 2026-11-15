@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,26 +6,22 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.admin;
 
-import org.eclipse.openvsx.entities.*;
+import java.time.LocalDateTime;
+import java.util.List;
+import java.util.Map;
+
 import io.micrometer.core.instrument.MeterRegistry;
-import org.eclipse.openvsx.repositories.RepositoryService;
-import org.eclipse.openvsx.repositories.ScannerJobRepository;
-import org.eclipse.openvsx.scanning.ExtensionScanCompletionService;
-import org.eclipse.openvsx.scanning.ExtensionScanService;
-import org.eclipse.openvsx.scanning.ScannerRegistry;
-import org.eclipse.openvsx.storage.StorageUtilService;
-import org.eclipse.openvsx.util.ErrorResultException;
-import org.eclipse.openvsx.util.LogService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
+import org.springframework.boot.security.oauth2.client.autoconfigure.servlet.OAuth2ClientWebSecurityAutoConfiguration;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.util.Streamable;
@@ -34,9 +30,15 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
 
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
+import org.eclipse.openvsx.entities.*;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.repositories.ScannerJobRepository;
+import org.eclipse.openvsx.scanning.ExtensionScanCompletionService;
+import org.eclipse.openvsx.scanning.ExtensionScanService;
+import org.eclipse.openvsx.scanning.ScannerRegistry;
+import org.eclipse.openvsx.storage.StorageUtilService;
+import org.eclipse.openvsx.util.ErrorResultException;
+import org.eclipse.openvsx.util.LogService;
 
 import static org.mockito.Mockito.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -45,7 +47,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@WebMvcTest(ScanAPI.class)
+@WebMvcTest(value = ScanAPI.class, excludeAutoConfiguration = { OAuth2ClientWebSecurityAutoConfiguration.class })
 @AutoConfigureMockMvc(addFilters = false)
 class ScanAPITest {
 
@@ -82,9 +84,10 @@ class ScanAPITest {
     @Test
     void getScans_pagination_validation_failures() throws Exception {
         // Always allow the request to pass the admin gate in this test setup.
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
-        mockMvc.perform(get("/admin/scans")
+        mockMvc.perform(
+                get("/admin/scans")
                         .param("status", "VALIDATING")
                         .param("publisher", "alpha")
                         .param("namespace", "a")
@@ -97,7 +100,8 @@ class ScanAPITest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("size: parameter must not be negative"));
 
-        mockMvc.perform(get("/admin/scans")
+        mockMvc.perform(
+                get("/admin/scans")
                         .param("status", "VALIDATING")
                         .param("publisher", "alpha")
                         .param("namespace", "a")
@@ -110,7 +114,8 @@ class ScanAPITest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error").value("size: parameter must not be larger than 100"));
 
-        mockMvc.perform(get("/admin/scans")
+        mockMvc.perform(
+                get("/admin/scans")
                         .param("status", "VALIDATING")
                         .param("publisher", "alpha")
                         .param("namespace", "a")
@@ -127,162 +132,306 @@ class ScanAPITest {
     @Test
     void getScans_filters_sorting_and_pagination_are_applied() throws Exception {
         // Always allow the request to pass the admin gate in this test setup.
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
         // Build scan with display name for the sorted/filtered result.
-        var scanC = TestData.scan(3, "gamma", "third", "2.0.0", "alpha-team", ScanStatus.VALIDATING, LocalDateTime.of(2024, 12, 3, 10, 0));
+        var scanC = TestData.scan(
+                3,
+                "gamma",
+                "third",
+                "2.0.0",
+                "alpha-team",
+                ScanStatus.VALIDATING,
+                LocalDateTime.of(2024, 12, 3, 10, 0));
         scanC.setExtensionDisplayName("Alpha Utility");
 
         // Mock the DB-level filtered/paginated query to return just the expected result.
         // The DB does filtering and pagination, so tests now verify correct parameters are passed.
-        when(repositories.findScansFullyFiltered(
-            any(), any(), any(), any(),
-            any(), any(), any(), any(),
-            any(), any(), anyBoolean(), any()
-        )).thenReturn(new PageImpl<>(List.of(scanC), PageRequest.of(0, 1), 2));
-        
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scanC), PageRequest.of(0, 1), 2));
+
         when(repositories.findValidationFailures(any())).thenReturn(Streamable.empty());
         when(repositories.findExtensionThreats(any())).thenReturn(Streamable.empty());
         when(storageUtil.getFileUrls(anyList(), anyString(), any(), any())).thenReturn(Map.of());
 
         // Provide display name from linked version
-        when(repositories.findVersion("2.0.0", "universal", "third", "gamma")).thenReturn(TestData.version(12, "Alpha Utility"));
+        when(repositories.findVersion("2.0.0", "universal", "third", "gamma"))
+                .thenReturn(TestData.version(12, "Alpha Utility"));
 
-        mockMvc.perform(get("/admin/scans")
-                .param("status", "VALIDATING")
-                .param("publisher", "alpha")
-                .param("namespace", "a")
-                .param("name", "a")
-                .param("size", "1")
-                .param("offset", "0")
-                .param("sortBy", "displayName")
-                .param("sortOrder", "asc")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.totalSize").value(2))
-            .andExpect(jsonPath("$.offset").value(0))
-            .andExpect(jsonPath("$.scans.length()").value(1))
-            .andExpect(jsonPath("$.scans[0].displayName").value("Alpha Utility"))
-            .andExpect(jsonPath("$.scans[0].extensionName").value("third"))
-            .andExpect(jsonPath("$.scans[0].targetPlatform").value("universal"))
-            .andExpect(jsonPath("$.scans[0].universalTargetPlatform").value(true))
-            .andExpect(jsonPath("$.scans[0].status").value("VALIDATING"));
+        mockMvc.perform(
+                get("/admin/scans")
+                        .param("status", "VALIDATING")
+                        .param("publisher", "alpha")
+                        .param("namespace", "a")
+                        .param("name", "a")
+                        .param("size", "1")
+                        .param("offset", "0")
+                        .param("sortBy", "displayName")
+                        .param("sortOrder", "asc")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalSize").value(2))
+                .andExpect(jsonPath("$.offset").value(0))
+                .andExpect(jsonPath("$.scans.length()").value(1))
+                .andExpect(jsonPath("$.scans[0].displayName").value("Alpha Utility"))
+                .andExpect(jsonPath("$.scans[0].extensionName").value("third"))
+                .andExpect(jsonPath("$.scans[0].targetPlatform").value("universal"))
+                .andExpect(jsonPath("$.scans[0].universalTargetPlatform").value(true))
+                .andExpect(jsonPath("$.scans[0].status").value("VALIDATING"));
+    }
+
+    @Test
+    void getScans_hidesErrorMessageOfActiveScannerJobs() throws Exception {
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+
+        var scan = TestData.scan(
+                3,
+                "gamma",
+                "third",
+                "2.0.0",
+                "alpha-team",
+                ScanStatus.VALIDATING,
+                LocalDateTime.of(2024, 12, 3, 10, 0));
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scan), PageRequest.of(0, 1), 1));
+        when(repositories.findValidationFailures(any())).thenReturn(Streamable.empty());
+        when(repositories.findExtensionThreats(any())).thenReturn(Streamable.empty());
+        when(storageUtil.getFileUrls(anyList(), anyString(), any(), any())).thenReturn(Map.of());
+
+        var active = scannerJob(ScannerJob.JobStatus.PROCESSING);
+        var failed = scannerJob(ScannerJob.JobStatus.FAILED);
+        when(scanJobRepository.findByScanId(String.valueOf(scan.getId()))).thenReturn(List.of(active, failed));
+
+        mockMvc.perform(get("/admin/scans").accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scans[0].scannerJobs[0].errorMessage").doesNotExist())
+                .andExpect(jsonPath("$.scans[0].scannerJobs[1].errorMessage").value("boom"));
+    }
+
+    private ScannerJob scannerJob(ScannerJob.JobStatus status) {
+        var job = new ScannerJob();
+        job.setScannerType("argus");
+        job.setStatus(status);
+        job.setErrorMessage("boom");
+        job.setCreatedAt(LocalDateTime.of(2024, 12, 3, 10, 0));
+        job.setUpdatedAt(LocalDateTime.of(2024, 12, 3, 10, 5));
+        return job;
     }
 
     @Test
     void getScans_namespace_partial_match_is_applied() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
-        var scanA = TestData.scan(1, "alpha-ns", "ext-a", "1.0.0", "pub", ScanStatus.PASSED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        var scanA = TestData
+                .scan(1, "alpha-ns", "ext-a", "1.0.0", "pub", ScanStatus.PASSED, LocalDateTime.of(2024, 12, 1, 10, 0));
 
         // DB-level filtering returns only the matching scan
-        when(repositories.findScansFullyFiltered(
-            any(), any(), any(), any(),
-            any(), any(), any(), any(),
-            any(), any(), anyBoolean(), any()
-        )).thenReturn(new PageImpl<>(List.of(scanA)));
-        
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scanA)));
+
         when(repositories.findValidationFailures(any())).thenReturn(Streamable.empty());
         when(repositories.findExtensionThreats(any())).thenReturn(Streamable.empty());
         when(repositories.findVersion(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
         when(storageUtil.getFileUrls(anyList(), anyString(), any(), any())).thenReturn(Map.of());
 
-        mockMvc.perform(get("/admin/scans")
-                .param("namespace", "alp")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.totalSize").value(1))
-            .andExpect(jsonPath("$.scans.length()").value(1))
-            .andExpect(jsonPath("$.scans[0].namespace").value("alpha-ns"));
+        mockMvc.perform(
+                get("/admin/scans")
+                        .param("namespace", "alp")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalSize").value(1))
+                .andExpect(jsonPath("$.scans.length()").value(1))
+                .andExpect(jsonPath("$.scans[0].namespace").value("alpha-ns"));
     }
 
     @Test
     void getScans_name_matches_extensionName_and_displayName_partial() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
-        var scanA = TestData.scan(1, "alpha-ns", "alpha-one", "1.0.0", "pub", ScanStatus.PASSED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        var scanA = TestData.scan(
+                1,
+                "alpha-ns",
+                "alpha-one",
+                "1.0.0",
+                "pub",
+                ScanStatus.PASSED,
+                LocalDateTime.of(2024, 12, 1, 10, 0));
         scanA.setExtensionDisplayName("Zebra Toolkit");
-        var scanB = TestData.scan(2, "beta-ns", "beta-two", "1.0.0", "pub", ScanStatus.PASSED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        var scanB = TestData.scan(
+                2,
+                "beta-ns",
+                "beta-two",
+                "1.0.0",
+                "pub",
+                ScanStatus.PASSED,
+                LocalDateTime.of(2024, 12, 1, 10, 0));
         scanB.setExtensionDisplayName("Something Else");
 
         when(repositories.findValidationFailures(any())).thenReturn(Streamable.empty());
         when(repositories.findExtensionThreats(any())).thenReturn(Streamable.empty());
         when(storageUtil.getFileUrls(anyList(), anyString(), any(), any())).thenReturn(Map.of());
 
-        when(repositories.findVersion("1.0.0", "universal", "alpha-one", "alpha-ns")).thenReturn(TestData.version(10, "Zebra Toolkit"));
-        when(repositories.findVersion("1.0.0", "universal", "beta-two", "beta-ns")).thenReturn(TestData.version(11, "Something Else"));
+        when(repositories.findVersion("1.0.0", "universal", "alpha-one", "alpha-ns"))
+                .thenReturn(TestData.version(10, "Zebra Toolkit"));
+        when(repositories.findVersion("1.0.0", "universal", "beta-two", "beta-ns"))
+                .thenReturn(TestData.version(11, "Something Else"));
 
         // First request: DB returns scanA which matches displayName "Toolkit"
-        when(repositories.findScansFullyFiltered(
-            any(), any(), any(), any(),
-            any(), any(), any(), any(),
-            any(), any(), anyBoolean(), any()
-        )).thenReturn(new PageImpl<>(List.of(scanA)));
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scanA)));
 
         // Match by displayName partial (case-insensitive)
-        mockMvc.perform(get("/admin/scans")
-                .param("name", "tool")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.totalSize").value(1))
-            .andExpect(jsonPath("$.scans[0].extensionName").value("alpha-one"));
+        mockMvc.perform(
+                get("/admin/scans")
+                        .param("name", "tool")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalSize").value(1))
+                .andExpect(jsonPath("$.scans[0].extensionName").value("alpha-one"));
 
         // Second request: DB returns scanB which matches extensionName "beta"
-        when(repositories.findScansFullyFiltered(
-            any(), any(), any(), any(),
-            any(), any(), any(), any(),
-            any(), any(), anyBoolean(), any()
-        )).thenReturn(new PageImpl<>(List.of(scanB)));
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scanB)));
 
         // Match by extensionName partial
-        mockMvc.perform(get("/admin/scans")
-                .param("name", "bet")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.totalSize").value(1))
-            .andExpect(jsonPath("$.scans[0].extensionName").value("beta-two"));
+        mockMvc.perform(
+                get("/admin/scans")
+                        .param("name", "bet")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalSize").value(1))
+                .andExpect(jsonPath("$.scans[0].extensionName").value("beta-two"));
     }
 
     @Test
     void getScans_status_supports_comma_separated_values() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
-        var scanPassed = TestData.scan(2, "ns", "ext-passed", "1.0.0", "pub", ScanStatus.PASSED, LocalDateTime.of(2024, 12, 1, 10, 0));
-        var scanErrored = TestData.scan(3, "ns", "ext-error", "1.0.0", "pub", ScanStatus.ERRORED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        var scanPassed = TestData
+                .scan(2, "ns", "ext-passed", "1.0.0", "pub", ScanStatus.PASSED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        var scanErrored = TestData
+                .scan(3, "ns", "ext-error", "1.0.0", "pub", ScanStatus.ERRORED, LocalDateTime.of(2024, 12, 1, 10, 0));
 
         // DB returns only PASSED and ERRORED scans (filtered by status)
-        when(repositories.findScansFullyFiltered(
-            any(), any(), any(), any(),
-            any(), any(), any(), any(),
-            any(), any(), anyBoolean(), any()
-        )).thenReturn(new PageImpl<>(List.of(scanPassed, scanErrored)));
-        
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scanPassed, scanErrored)));
+
         when(repositories.findValidationFailures(any())).thenReturn(Streamable.empty());
         when(repositories.findExtensionThreats(any())).thenReturn(Streamable.empty());
         when(repositories.findVersion(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
         when(storageUtil.getFileUrls(anyList(), anyString(), any(), any())).thenReturn(Map.of());
 
         // explode=false behavior: status=PASSED,ERROR should be parsed into a list of two values.
-        mockMvc.perform(get("/admin/scans")
-                .param("status", "PASSED,ERROR")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.totalSize").value(2))
-            .andExpect(jsonPath("$.scans.length()").value(2));
+        mockMvc.perform(
+                get("/admin/scans")
+                        .param("status", "PASSED,ERROR")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalSize").value(2))
+                .andExpect(jsonPath("$.scans.length()").value(2));
     }
 
     @Test
     void getScans_checkType_supports_comma_separated_values() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
-        var scanA = TestData.scan(1, "ns", "ext-a", "1.0.0", "pub", ScanStatus.REJECTED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        var scanA = TestData
+                .scan(1, "ns", "ext-a", "1.0.0", "pub", ScanStatus.REJECTED, LocalDateTime.of(2024, 12, 1, 10, 0));
 
         // DB returns only scanA (filtered by checkType)
-        when(repositories.findScansFullyFiltered(
-            any(), any(), any(), any(),
-            any(), any(), any(), any(),
-            any(), any(), anyBoolean(), any()
-        )).thenReturn(new PageImpl<>(List.of(scanA)));
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scanA)));
 
         when(repositories.findVersion(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
         when(repositories.findExtensionThreats(any())).thenReturn(Streamable.empty());
@@ -301,43 +450,45 @@ class ScanAPITest {
         });
 
         // Validates CSV parsing: "BLOCKLIST,NAME SQUATTING" -> ["BLOCKLIST", "NAME SQUATTING"]
-        mockMvc.perform(get("/admin/scans")
-                .param("validationType", "BLOCKLIST,NAME SQUATTING")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.totalSize").value(1))
-            .andExpect(jsonPath("$.scans.length()").value(1))
-            .andExpect(jsonPath("$.scans[0].extensionName").value("ext-a"));
+        mockMvc.perform(
+                get("/admin/scans")
+                        .param("validationType", "BLOCKLIST,NAME SQUATTING")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.totalSize").value(1))
+                .andExpect(jsonPath("$.scans.length()").value(1))
+                .andExpect(jsonPath("$.scans[0].extensionName").value("ext-a"));
     }
 
     @Test
     void getScanFilterOptions_returns_validationTypes() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
-        when(repositories.findDistinctValidationFailureCheckTypes()).thenReturn(java.util.List.of("NAME_SQUATTING", "BLOCKLIST"));
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+        when(repositories.findDistinctValidationFailureCheckTypes())
+                .thenReturn(java.util.List.of("NAME_SQUATTING", "BLOCKLIST"));
 
         mockMvc.perform(get("/admin/scans/filterOptions").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.validationTypes.length()").value(2))
-            .andExpect(jsonPath("$.validationTypes[0]").value("NAME_SQUATTING"))
-            .andExpect(jsonPath("$.validationFailureNames").doesNotExist());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.validationTypes.length()").value(2))
+                .andExpect(jsonPath("$.validationTypes[0]").value("NAME_SQUATTING"))
+                .andExpect(jsonPath("$.validationFailureNames").doesNotExist());
     }
 
     @Test
     void getScans_rejects_unknown_sort_field() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
-        when(repositories.findAllExtensionScans()).thenReturn(Streamable.empty());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
-        mockMvc.perform(get("/admin/scans")
-                .param("sortBy", "unknownField")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isBadRequest())
-            .andExpect(content().contentType(MediaType.APPLICATION_JSON))
-            .andExpect(jsonPath("$.error").value("Unsupported sortBy value: unknownField"));
+        mockMvc.perform(
+                get("/admin/scans")
+                        .param("sortBy", "unknownField")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentType(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.error").value("Unsupported sortBy value: unknownField"));
     }
 
     @Test
     void getScanCounts_returns_status_counts_and_zero_decisions() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
         when(repositories.countExtensionScansByStatus(ScanStatus.STARTED)).thenReturn(1L);
         when(repositories.countExtensionScansByStatus(ScanStatus.VALIDATING)).thenReturn(2L);
         when(repositories.countExtensionScansByStatus(ScanStatus.SCANNING)).thenReturn(3L);
@@ -348,99 +499,133 @@ class ScanAPITest {
 
         // Default behavior (no filters): uses the fast count-by-status repository calls.
         mockMvc.perform(get("/admin/scans/counts").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.STARTED").value(1))
-            .andExpect(jsonPath("$.VALIDATING").value(2))
-            .andExpect(jsonPath("$.SCANNING").value(3))
-            .andExpect(jsonPath("$.PASSED").value(4))
-            .andExpect(jsonPath("$.QUARANTINED").value(5))
-            .andExpect(jsonPath("$.AUTO_REJECTED").value(6))
-            .andExpect(jsonPath("$.ERROR").value(7))
-            .andExpect(jsonPath("$.ALLOWED").value(0))
-            .andExpect(jsonPath("$.BLOCKED").value(0))
-            .andExpect(jsonPath("$.NEEDS_REVIEW").value(5))  // QUARANTINED(5) - ALLOWED(0) - BLOCKED(0)
-            .andExpect(jsonPath("$.started").doesNotExist())
-            .andExpect(jsonPath("$.error").doesNotExist());
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.STARTED").value(1))
+                .andExpect(jsonPath("$.VALIDATING").value(2))
+                .andExpect(jsonPath("$.SCANNING").value(3))
+                .andExpect(jsonPath("$.PASSED").value(4))
+                .andExpect(jsonPath("$.QUARANTINED").value(5))
+                .andExpect(jsonPath("$.AUTO_REJECTED").value(6))
+                .andExpect(jsonPath("$.ERROR").value(7))
+                .andExpect(jsonPath("$.ALLOWED").value(0))
+                .andExpect(jsonPath("$.BLOCKED").value(0))
+                .andExpect(jsonPath("$.NEEDS_REVIEW").value(5)) // QUARANTINED(5) - ALLOWED(0) - BLOCKED(0)
+                .andExpect(jsonPath("$.started").doesNotExist())
+                .andExpect(jsonPath("$.error").doesNotExist());
     }
 
     @Test
     void getScanCounts_supports_enforcement_filtering() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
         // DB-level enforcement filtering: mock counts for each status with enforcement
         // When enforcement filter is applied, the code uses countScansForStatistics
         // First request: enforced=true -> returns 1 for REJECTED
-        when(repositories.countScansForStatistics(
-            eq(ScanStatus.REJECTED), any(), any(), any(), any(), eq(true)
-        )).thenReturn(1L);
-        when(repositories.countScansForStatistics(
-            eq(ScanStatus.REJECTED), any(), any(), any(), any(), eq(false)
-        )).thenReturn(1L);
-        
+        when(
+                repositories.countScansForStatistics(
+                        eq(ScanStatus.REJECTED),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        eq(true)))
+                .thenReturn(1L);
+        when(
+                repositories.countScansForStatistics(
+                        eq(ScanStatus.REJECTED),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        eq(false)))
+                .thenReturn(1L);
+
         // Other statuses return 0 when enforcement filter is applied
-        when(repositories.countScansForStatistics(
-            argThat(s -> s != ScanStatus.REJECTED), any(), any(), any(), any(), anyBoolean()
-        )).thenReturn(0L);
+        when(
+                repositories.countScansForStatistics(
+                        argThat(s -> s != ScanStatus.REJECTED),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean()))
+                .thenReturn(0L);
 
-        mockMvc.perform(get("/admin/scans/counts")
-                .param("enforcement", "enforced")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.AUTO_REJECTED").value(1));
+        mockMvc.perform(
+                get("/admin/scans/counts")
+                        .param("enforcement", "enforced")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.AUTO_REJECTED").value(1));
 
-        mockMvc.perform(get("/admin/scans/counts")
-                .param("enforcement", "notEnforced")
-                .accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.AUTO_REJECTED").value(1));
+        mockMvc.perform(
+                get("/admin/scans/counts")
+                        .param("enforcement", "notEnforced")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.AUTO_REJECTED").value(1));
     }
 
     @Test
     void getScans_returns_displayName_from_scan_when_version_missing() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
 
-        var scan = TestData.scan(99, "ns", "ext", "0.0.1", "pub", ScanStatus.REJECTED, LocalDateTime.of(2024, 12, 4, 10, 0));
+        var scan = TestData
+                .scan(99, "ns", "ext", "0.0.1", "pub", ScanStatus.REJECTED, LocalDateTime.of(2024, 12, 4, 10, 0));
         scan.setExtensionDisplayName("Manifest Display");
 
-        when(repositories.findScansFullyFiltered(
-            any(), any(), any(), any(),
-            any(), any(), any(), any(),
-            any(), any(), anyBoolean(), any()
-        )).thenReturn(new PageImpl<>(List.of(scan)));
-        
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(scan)));
+
         when(repositories.findVersion("0.0.1", "universal", "ext", "ns")).thenReturn(null);
         when(repositories.findValidationFailures(any())).thenReturn(Streamable.empty());
         when(repositories.findExtensionThreats(any())).thenReturn(Streamable.empty());
         when(storageUtil.getFileUrls(anyList(), anyString(), any(), any())).thenReturn(Map.of());
 
         mockMvc.perform(get("/admin/scans").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk())
-            .andExpect(jsonPath("$.scans[0].displayName").value("Manifest Display"))
-            .andExpect(jsonPath("$.scans[0].extensionName").value("ext"))
-            .andExpect(jsonPath("$.scans[0].targetPlatform").value("universal"))
-            .andExpect(jsonPath("$.scans[0].universalTargetPlatform").value(true));
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.scans[0].displayName").value("Manifest Display"))
+                .andExpect(jsonPath("$.scans[0].extensionName").value("ext"))
+                .andExpect(jsonPath("$.scans[0].targetPlatform").value("universal"))
+                .andExpect(jsonPath("$.scans[0].universalTargetPlatform").value(true));
     }
 
     @Test
     void getScanCounts_requires_admin() throws Exception {
-        when(admins.checkAdminUser()).thenThrow(new ErrorResultException("Administration role is required.", HttpStatus.FORBIDDEN));
+        when(admins.checkPermission(Permission.MANAGE_SCANS))
+                .thenThrow(new ErrorResultException("Administration role is required.", HttpStatus.FORBIDDEN));
 
         mockMvc.perform(get("/admin/scans/counts").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden());
     }
 
     @Test
     void getScans_requires_admin() throws Exception {
-        when(admins.checkAdminUser()).thenThrow(new ErrorResultException("Administration role is required.", HttpStatus.FORBIDDEN));
+        when(admins.checkPermission(Permission.MANAGE_SCANS))
+                .thenThrow(new ErrorResultException("Administration role is required.", HttpStatus.FORBIDDEN));
 
         mockMvc.perform(get("/admin/scans").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden());
     }
 
     @Test
     void retryFailedScannerJobs_returns200_andDelegatesToService() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
-        var scan = TestData.scan(5, "ns", "ext", "1.0.0", "pub", ScanStatus.ERRORED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+        var scan = TestData
+                .scan(5, "ns", "ext", "1.0.0", "pub", ScanStatus.ERRORED, LocalDateTime.of(2024, 12, 1, 10, 0));
         when(repositories.findExtensionScan(5L)).thenReturn(scan);
         when(scanService.retryFailedJobs(scan)).thenReturn(scan);
         when(repositories.findVersion(anyString(), anyString(), anyString(), anyString())).thenReturn(null);
@@ -449,43 +634,155 @@ class ScanAPITest {
         when(storageUtil.getFileUrls(anyList(), anyString(), any(), any())).thenReturn(Map.of());
 
         mockMvc.perform(post("/admin/scans/5/jobs/retry").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isOk());
+                .andExpect(status().isOk());
 
         verify(scanService).retryFailedJobs(scan);
     }
 
     @Test
     void retryFailedScannerJobs_returns404_whenScanNotFound() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
         when(repositories.findExtensionScan(99L)).thenReturn(null);
 
         mockMvc.perform(post("/admin/scans/99/jobs/retry").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isNotFound());
+                .andExpect(status().isNotFound());
     }
 
     @Test
     void retryFailedScannerJobs_returns400_whenServiceRejectsRequest() throws Exception {
-        when(admins.checkAdminUser()).thenReturn(TestData.adminUser());
-        var scan = TestData.scan(3, "ns", "ext", "1.0.0", "pub", ScanStatus.SCANNING, LocalDateTime.of(2024, 12, 1, 10, 0));
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+        var scan = TestData
+                .scan(3, "ns", "ext", "1.0.0", "pub", ScanStatus.SCANNING, LocalDateTime.of(2024, 12, 1, 10, 0));
         when(repositories.findExtensionScan(3L)).thenReturn(scan);
         when(scanService.retryFailedJobs(scan))
-            .thenThrow(new ErrorResultException("Cannot retry: scan is not terminal", HttpStatus.BAD_REQUEST));
+                .thenThrow(new ErrorResultException("Cannot retry: scan is not terminal", HttpStatus.BAD_REQUEST));
 
         mockMvc.perform(post("/admin/scans/3/jobs/retry").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest());
     }
 
     @Test
     void retryFailedScannerJobs_requires_admin() throws Exception {
-        when(admins.checkAdminUser()).thenThrow(new ErrorResultException("Administration role is required.", HttpStatus.FORBIDDEN));
+        when(admins.checkPermission(Permission.MANAGE_SCANS))
+                .thenThrow(new ErrorResultException("Administration role is required.", HttpStatus.FORBIDDEN));
 
         mockMvc.perform(post("/admin/scans/1/jobs/retry").accept(MediaType.APPLICATION_JSON))
-            .andExpect(status().isForbidden());
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void getScans_includes_check_errors_for_error_status_unless_exact_status_is_requested() throws Exception {
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+        when(
+                repositories.findScansFullyFiltered(
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        any(),
+                        anyBoolean(),
+                        any()))
+                .thenReturn(new PageImpl<>(List.of(), PageRequest.of(0, 10), 0));
+
+        mockMvc.perform(get("/admin/scans").param("status", "ERROR").accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+        mockMvc.perform(
+                get("/admin/scans").param("status", "ERROR").param("exactStatus", "true")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk());
+
+        var includeCheckErrors = org.mockito.ArgumentCaptor.forClass(Boolean.class);
+        verify(repositories, times(2)).findScansFullyFiltered(
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                any(),
+                includeCheckErrors.capture(),
+                any());
+        org.assertj.core.api.Assertions.assertThat(includeCheckErrors.getAllValues()).containsExactly(true, false);
+    }
+
+    @Test
+    void makeScanDecisions_allows_errored_scan_and_activates_it() throws Exception {
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+        var scan = TestData
+                .scan(7, "ns", "ext", "1.0.0", "pub", ScanStatus.ERRORED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        when(repositories.findExtensionScan(7L)).thenReturn(scan);
+        when(repositories.findExtensionThreats(scan)).thenReturn(Streamable.empty());
+        when(completionService.adminAllowScan(scan)).thenReturn(true);
+
+        mockMvc.perform(
+                post("/admin/scans/decisions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scanIds\":[\"7\"],\"decision\":\"allowed\"}")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.successful").value(1))
+                .andExpect(jsonPath("$.failed").value(0));
+
+        verify(repositories).saveAdminScanDecision(any(AdminScanDecision.class));
+        verify(completionService).adminAllowScan(scan);
+    }
+
+    @Test
+    void makeScanDecisions_rejects_blocking_an_errored_scan() throws Exception {
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+        var scan = TestData
+                .scan(7, "ns", "ext", "1.0.0", "pub", ScanStatus.ERRORED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        when(repositories.findExtensionScan(7L)).thenReturn(scan);
+
+        mockMvc.perform(
+                post("/admin/scans/decisions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scanIds\":[\"7\"],\"decision\":\"blocked\"}")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.failed").value(1));
+
+        verify(repositories, never()).saveAdminScanDecision(any());
+        verify(completionService, never()).adminAllowScan(any());
+    }
+
+    @Test
+    void makeScanDecisions_rejects_scan_that_is_neither_quarantined_nor_errored() throws Exception {
+        when(admins.checkPermission(Permission.MANAGE_SCANS)).thenReturn(TestData.adminUser());
+        var scan = TestData
+                .scan(8, "ns", "ext", "1.0.0", "pub", ScanStatus.PASSED, LocalDateTime.of(2024, 12, 1, 10, 0));
+        when(repositories.findExtensionScan(8L)).thenReturn(scan);
+
+        mockMvc.perform(
+                post("/admin/scans/decisions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"scanIds\":[\"8\"],\"decision\":\"allowed\"}")
+                        .accept(MediaType.APPLICATION_JSON))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.failed").value(1));
+
+        verify(completionService, never()).adminAllowScan(any());
     }
 
     private static class TestData {
 
-        static ExtensionScan scan(long id, String namespace, String name, String version, String publisher, ScanStatus status, LocalDateTime startedAt) {
+        static ExtensionScan scan(
+                long id,
+                String namespace,
+                String name,
+                String version,
+                String publisher,
+                ScanStatus status,
+                LocalDateTime startedAt
+        ) {
             var scan = new ExtensionScan();
             scan.setId(id);
             scan.setNamespaceName(namespace);
@@ -508,9 +805,8 @@ class ScanAPITest {
 
         static UserData adminUser() {
             var user = new UserData();
-            user.setRole(UserData.ROLE_ADMIN);
+            user.setRole(UserData.Role.ADMIN);
             return user;
         }
     }
 }
-

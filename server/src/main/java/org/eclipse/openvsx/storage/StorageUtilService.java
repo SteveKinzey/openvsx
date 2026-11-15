@@ -1,35 +1,16 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.storage;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.node.ArrayNode;
-import com.google.common.collect.Maps;
-import jakarta.persistence.EntityManager;
-import jakarta.transaction.Transactional;
-import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.cache.CacheService;
-import org.eclipse.openvsx.entities.ExtensionVersion;
-import org.eclipse.openvsx.entities.FileResource;
-import org.eclipse.openvsx.entities.Namespace;
-import org.eclipse.openvsx.metrics.ExtensionDownloadMetrics;
-import org.eclipse.openvsx.repositories.RepositoryService;
-import org.eclipse.openvsx.search.SearchUtilService;
-import org.eclipse.openvsx.storage.log.DownloadCountService;
-import org.eclipse.openvsx.util.TempFile;
-import org.eclipse.openvsx.util.UrlUtil;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.data.util.Pair;
-import org.springframework.http.*;
-import org.springframework.stereotype.Component;
-import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
 
 import java.io.IOException;
 import java.net.URI;
@@ -38,6 +19,34 @@ import java.nio.file.Path;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+
+import jakarta.annotation.PostConstruct;
+import jakarta.persistence.EntityManager;
+import jakarta.transaction.Transactional;
+import org.apache.commons.lang3.StringUtils;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.util.Pair;
+import org.springframework.http.*;
+import org.springframework.stereotype.Component;
+import org.springframework.web.server.ServerErrorException;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import tools.jackson.databind.json.JsonMapper;
+import tools.jackson.databind.node.ArrayNode;
+
+import org.eclipse.openvsx.analytics.ingestion.DownloadIngestionProcessor;
+import org.eclipse.openvsx.analytics.ingestion.DownloadRecordSource;
+import org.eclipse.openvsx.analytics.ingestion.DownloadRecordSourceIndex;
+import org.eclipse.openvsx.cache.CacheService;
+import org.eclipse.openvsx.entities.ExtensionVersion;
+import org.eclipse.openvsx.entities.FileResource;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.metrics.ExtensionDownloadMetrics;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.search.SearchUtilService;
+import org.eclipse.openvsx.util.HttpHeadersUtil;
+import org.eclipse.openvsx.util.TempFile;
+import org.eclipse.openvsx.util.UrlUtil;
 
 import static org.eclipse.openvsx.entities.FileResource.*;
 import static org.eclipse.openvsx.util.UrlUtil.createApiFileUrl;
@@ -54,13 +63,17 @@ public class StorageUtilService implements IStorageService {
     private final AzureBlobStorageService azureStorage;
     private final LocalStorageService localStorage;
     private final AwsStorageService awsStorage;
-    private final DownloadCountService downloadCountService;
+    private final ObjectProvider<DownloadRecordSource> ingestionSources;
+    private final DownloadIngestionProcessor ingestionProcessor;
+    /** The enabled ingestion sources, indexed by storage type once at startup. */
+    private DownloadRecordSourceIndex ingestionSourceIndex;
     private final ExtensionDownloadMetrics downloadMetrics;
     private final SearchUtilService search;
     private final CacheService cache;
     private final EntityManager entityManager;
     private final FileCacheDurationConfig fileCacheDurationConfig;
     private final CdnServiceConfig cdnServiceConfig;
+    private final JsonMapper jsonMapper;
 
     /** Determines which external storage service to use in case multiple services are configured. */
     @Value("${ovsx.storage.primary-service:}")
@@ -76,7 +89,8 @@ public class StorageUtilService implements IStorageService {
             AzureBlobStorageService azureStorage,
             LocalStorageService localStorage,
             AwsStorageService awsStorage,
-            DownloadCountService downloadCountService,
+            ObjectProvider<DownloadRecordSource> ingestionSources,
+            DownloadIngestionProcessor ingestionProcessor,
             ExtensionDownloadMetrics downloadMetrics,
             SearchUtilService search,
             CacheService cache,
@@ -89,13 +103,20 @@ public class StorageUtilService implements IStorageService {
         this.azureStorage = azureStorage;
         this.localStorage = localStorage;
         this.awsStorage = awsStorage;
-        this.downloadCountService = downloadCountService;
+        this.ingestionSources = ingestionSources;
+        this.ingestionProcessor = ingestionProcessor;
         this.downloadMetrics = downloadMetrics;
         this.search = search;
         this.cache = cache;
         this.entityManager = entityManager;
         this.fileCacheDurationConfig = fileCacheDurationConfig;
         this.cdnServiceConfig = cdnServiceConfig;
+        this.jsonMapper = JsonMapper.shared();
+    }
+
+    @PostConstruct
+    void initIngestionSources() {
+        ingestionSourceIndex = new DownloadRecordSourceIndex(ingestionSources);
     }
 
     public boolean shouldStoreExternally(FileResource resource) {
@@ -110,27 +131,35 @@ public class StorageUtilService implements IStorageService {
 
     @Override
     public boolean isEnabled() {
-        return googleStorage.isEnabled() || azureStorage.isEnabled() || localStorage.isEnabled() || awsStorage.isEnabled();
+        return googleStorage.isEnabled() || azureStorage.isEnabled() || localStorage.isEnabled()
+                || awsStorage.isEnabled();
     }
 
     public String getActiveStorageType() {
         var storageTypes = new ArrayList<String>(3);
-        if (googleStorage.isEnabled())
+        if (googleStorage.isEnabled()) {
             storageTypes.add(STORAGE_GOOGLE);
-        if (azureStorage.isEnabled())
+        }
+        if (azureStorage.isEnabled()) {
             storageTypes.add(STORAGE_AZURE);
-        if (awsStorage.isEnabled())
+        }
+        if (awsStorage.isEnabled()) {
             storageTypes.add(STORAGE_AWS);
+        }
         if (!StringUtils.isEmpty(primaryService)) {
-            if (!storageTypes.contains(primaryService))
+            if (!storageTypes.contains(primaryService)) {
                 throw new IllegalStateException("The selected primary storage service is not available.");
+            }
             return primaryService;
         }
-        if (storageTypes.isEmpty())
+        if (storageTypes.isEmpty()) {
             return getLocalStorageIfEnabled();
-        if (storageTypes.size() == 1)
+        }
+        if (storageTypes.size() == 1) {
             return storageTypes.getFirst();
-        throw new IllegalStateException("Multiple external storage services are available. Please select a primary service.");
+        }
+        throw new IllegalStateException(
+                "Multiple external storage services are available. Please select a primary service.");
     }
 
     /**
@@ -154,7 +183,7 @@ public class StorageUtilService implements IStorageService {
     private String getStorageTypeForResource(FileResource resource) {
         var storageType = getActiveStorageType();
 
-        if(!storageType.equals(STORAGE_LOCAL) && !shouldStoreExternally(resource)) {
+        if (!storageType.equals(STORAGE_LOCAL) && !shouldStoreExternally(resource)) {
             storageType = getLocalStorageIfEnabled();
         }
 
@@ -170,7 +199,7 @@ public class StorageUtilService implements IStorageService {
     private String getStorageTypeForLogo() {
         var storageType = getActiveStorageType();
 
-        if(!storageType.equals(STORAGE_LOCAL) && !shouldStoreLogoExternally()) {
+        if (!storageType.equals(STORAGE_LOCAL) && !shouldStoreLogoExternally()) {
             storageType = getLocalStorageIfEnabled();
         }
 
@@ -203,6 +232,15 @@ public class StorageUtilService implements IStorageService {
         var storageType = getStorageTypeForResource(resource);
         getStorageService(storageType).uploadFile(tempFile);
         resource.setStorageType(storageType);
+        resource.setSize(getFileSize(tempFile));
+    }
+
+    private long getFileSize(TempFile tempFile) {
+        try {
+            return Files.size(tempFile.getPath());
+        } catch (IOException e) {
+            throw new ServerErrorException("Failed to determine file size", e);
+        }
     }
 
     @Override
@@ -233,7 +271,7 @@ public class StorageUtilService implements IStorageService {
         if (storageService != null) {
             String cdnFrontUrl = cdnServiceConfig.getCdnFrontUrl(storageType);
             if (cdnFrontUrl != null) {
-                return UrlUtil.createURI(cdnFrontUrl, storageService.getObjectKey(resource));
+                return UrlUtil.createURI(cdnFrontUrl, storageService.getObjectKeyAsUrlPath(resource));
             } else {
                 return storageService.getLocation(resource);
             }
@@ -249,7 +287,7 @@ public class StorageUtilService implements IStorageService {
         if (storageService != null) {
             String cdnFrontUrl = cdnServiceConfig.getCdnFrontUrl(storageType);
             if (cdnFrontUrl != null) {
-                return UrlUtil.createURI(cdnFrontUrl, storageService.getObjectKey(namespace));
+                return UrlUtil.createURI(cdnFrontUrl, storageService.getObjectKeyAsUrlPath(namespace));
             } else {
                 return storageService.getNamespaceLogoLocation(namespace);
             }
@@ -264,18 +302,59 @@ public class StorageUtilService implements IStorageService {
     }
 
     /**
+     * Returns the size in bytes of {@code resource} as already stored, via a metadata-only lookup
+     * rather than downloading its content -- see {@link IStorageService#getFileSize(FileResource)}.
+     */
+    public long getFileSize(FileResource resource) throws IOException {
+        var storageService = getStorageServiceForRetrieval(resource.getStorageType());
+        if (storageService == null) {
+            throw new IOException("Storage '" + resource.getStorageType() + "' is not available.");
+        }
+
+        return storageService.getFileSize(resource);
+    }
+
+    /**
+     * The stored files of these versions, by version id, in one query.
+     * <p>
+     * {@link #getFileUrls} is the URL-only shorthand over this; a caller that needs more than the URL of a
+     * file - its size, say - takes the resources themselves rather than paying for a second query to read
+     * the other column.
+     */
+    public Map<Long, List<FileResource>> getFiles(Collection<ExtensionVersion> extVersions, String... types) {
+        var byVersion = extVersions.stream()
+                .map(ev -> Map.<Long, List<FileResource>>entry(ev.getId(), new ArrayList<>(types.length)))
+                .collect(
+                        Collectors.<Map.Entry<Long, List<FileResource>>, Long, List<FileResource>>toMap(
+                                Map.Entry::getKey,
+                                Map.Entry::getValue));
+
+        for (var resource : repositories.findFilesByType(extVersions, Arrays.asList(types))) {
+            byVersion.get(resource.getExtension().getId()).add(resource);
+        }
+
+        return byVersion;
+    }
+
+    /**
      * Returns URLs for the given file types as a map of ExtensionVersion.id by a map of type by file URL, to be used in JSON response data.
      */
-    public Map<Long, Map<String, String>> getFileUrls(Collection<ExtensionVersion> extVersions, String serverUrl, String... types) {
-        var type2Url = extVersions.stream()
-                .map(ev -> Map.<Long, Map<String, String>>entry(ev.getId(), Maps.newLinkedHashMapWithExpectedSize(types.length)))
-                .collect(Collectors.<Map.Entry<Long, Map<String, String>>, Long, Map<String, String>>toMap(Map.Entry::getKey, Map.Entry::getValue));
+    public Map<Long, Map<String, String>> getFileUrls(
+            Collection<ExtensionVersion> extVersions,
+            String serverUrl,
+            String... types
+    ) {
+        var type2Url = HashMap.<Long, Map<String, String>>newHashMap(extVersions.size());
+        getFiles(extVersions, types).forEach((extVersionId, resources) -> {
+            var urls = new LinkedHashMap<String, String>(types.length);
+            for (var resource : resources) {
+                urls.put(
+                        resource.getType(),
+                        createApiFileUrl(serverUrl, resource.getExtension(), resource.getName()));
+            }
 
-        var resources = repositories.findFilesByType(extVersions, Arrays.asList(types));
-        for (var resource : resources) {
-            var extVersion = resource.getExtension();
-            type2Url.get(extVersion.getId()).put(resource.getType(), createApiFileUrl(serverUrl, extVersion, resource.getName()));
-        }
+            type2Url.put(extVersionId, urls);
+        });
 
         return type2Url;
     }
@@ -284,7 +363,7 @@ public class StorageUtilService implements IStorageService {
     public void increaseDownloadCount(FileResource resource) {
         downloadMetrics.recordDownload(resource);
 
-        if(downloadCountService.isEnabled(resource)) {
+        if (ingestionSourceIndex.covers(resource)) {
             // don't count downloads twice
             return;
         }
@@ -292,6 +371,7 @@ public class StorageUtilService implements IStorageService {
         var managedResource = entityManager.find(FileResource.class, resource.getId());
         var extension = managedResource.getExtension().getExtension();
         extension.setDownloadCount(extension.getDownloadCount() + 1);
+        ingestionProcessor.captureDownload(managedResource);
 
         cache.evictNamespaceDetails(extension);
         cache.evictExtensionJsons(extension);
@@ -312,10 +392,7 @@ public class StorageUtilService implements IStorageService {
     }
 
     public ResponseEntity<StreamingResponseBody> getFileResponse(Path path) {
-        var fileName = path.getFileName().toString();
-        var headers = new HttpHeaders();
-        headers.setContentType(StorageUtil.getFileType(fileName));
-        headers.setCacheControl(StorageUtil.getCacheControl(fileName));
+        var headers = HttpHeadersUtil.createFileResponseHeaders(path);
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(outputStream -> {
@@ -327,17 +404,15 @@ public class StorageUtilService implements IStorageService {
 
     public ResponseEntity<StreamingResponseBody> getFileResponse(ArrayNode node) {
         var baseUrl = UrlUtil.getBaseUrl();
-        var headers = new HttpHeaders();
-        headers.setContentType(MediaType.APPLICATION_JSON);
+        var headers = HttpHeadersUtil.createJsonFileResponseHeaders();
         return ResponseEntity.ok()
                 .headers(headers)
                 .body(outputStream -> {
-                    var mapper = new ObjectMapper();
-                    var value = mapper.createArrayNode();
-                    for(var item : node) {
-                        value.add(baseUrl + item.asText());
+                    var value = jsonMapper.createArrayNode();
+                    for (var item : node) {
+                        value.add(baseUrl + item.asString());
                     }
-                    mapper.writeValue(outputStream, value);
+                    jsonMapper.writeValue(outputStream, value);
                 });
     }
 
@@ -353,9 +428,9 @@ public class StorageUtilService implements IStorageService {
     }
 
     @Override
-    public void copyFiles(List<Pair<FileResource,FileResource>> pairs) {
+    public void copyFiles(List<Pair<FileResource, FileResource>> pairs) {
         var groupedByStorageType = pairs.stream().collect(Collectors.groupingBy(p -> p.getFirst().getStorageType()));
-        for(var entry : groupedByStorageType.entrySet()) {
+        for (var entry : groupedByStorageType.entrySet()) {
             var storageType = entry.getKey();
             var group = entry.getValue();
             getStorageService(storageType).copyFiles(group);

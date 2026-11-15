@@ -1,20 +1,16 @@
 spring:
+  # Every cached Spring context in the suite holds an idle pool against the one shared container,
+  # so the default of 10 exhausts its max_connections long before the tests are done.
   datasource:
-    driver-class-name: org.testcontainers.jdbc.ContainerDatabaseDriver
-    url: jdbc:tc:postgresql:16.2:///test
+    hikari:
+      maximum-pool-size: 4
   jpa:
-    properties:
-      hibernate:
-        dialect: org.hibernate.dialect.PostgreSQLDialect
     hibernate:
       ddl-auto: none
   session:
     store-type: jdbc
     jdbc:
       initialize-schema: never
-  thymeleaf:
-    # explicitly disable thymeleaf view resolution
-    enabled: false
 
   security:
       oauth2:
@@ -27,21 +23,29 @@ spring:
 bucket4j:
   enabled: false
 
-org:
-  jobrunr:
-    job-scheduler:
-      enabled: true
-    background-job-server:
-      enabled: false
-      worker-count: 1
-    dashboard:
-      enabled: false
-    database:
-      type: sql
-    miscellaneous:
-      allow-anonymous-data-usage: false
+jobrunr:
+  job-scheduler:
+    enabled: true
+  background-job-server:
+    enabled: false
+    worker-count: 1
+  dashboard:
+    enabled: false
+  database:
+    type: sql
+  miscellaneous:
+    allow-anonymous-data-usage: false
 
 ovsx:
+  analytics:
+    # the timeseries container is shared the same way, so its pool needs the same treatment
+    datasource:
+      maximum-pool-size: 2
+  elasticsearch:
+    # Disabled by default for tests: the Elasticsearch container is expensive, so only tests that
+    # activate the "test_search" profile (which also provisions the container) enable it, via
+    # application-test_search.yml.
+    enabled: false
   redis:
     embedded: true
   storage:

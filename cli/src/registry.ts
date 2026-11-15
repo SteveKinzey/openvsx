@@ -10,21 +10,43 @@
 
 import * as http from 'http';
 import * as fs from 'fs';
-import * as followRedirects from 'follow-redirects';
+import * as semver from 'semver';
+import { pipeline } from 'stream';
+import { jsonResponse, send } from './http';
 import { RegistryOptions } from './registry-options';
-import { rejectError, statusError } from './util';
+import { DEFAULT_TIMEOUT, redactUrl, rejectError, statusError } from './util';
 
 export const DEFAULT_URL = 'https://open-vsx.org';
 export const DEFAULT_NAMESPACE_SIZE = 1024;
 export const DEFAULT_PUBLISH_SIZE = 512 * 1024 * 1024;
+export { DEFAULT_TIMEOUT };
+export const DEFAULT_TOKEN_REQUEST_SIZE = 8 * 1024;
+export const DEFAULT_DELETE_SIZE = 64 * 1024;
+
+// Fallback only, for when Authorization is already claimed by Basic auth to a fronting proxy (see
+// tokenHeaders/getRequestOptions).
+// Must stay in the credential headers http.ts drops on a cross-origin redirect.
+const TOKEN_HEADER = 'X-OpenVSX-Token';
+
+/**
+ * Oldest registry version that resolves the personal access token from a header (see #1344).
+ * Registries older than this only look at the `token` query parameter, so `tokenQuery` keeps
+ * sending it to anything below this version.
+ */
+export const MIN_TOKEN_HEADER_REGISTRY_VERSION = '1.3.0';
 
 export class Registry {
 
     readonly url: string;
     readonly maxNamespaceSize: number;
     readonly maxPublishSize: number;
+    readonly timeout: number;
     readonly username?: string;
     readonly password?: string;
+    /** Whether the caller pinned a publish size, which then wins over any limit the registry reports. */
+    private readonly publishSizePinned: boolean;
+    private registryVersion?: Promise<RegistryVersion>;
+    private tokenHeaderSupport?: Promise<boolean>;
 
     constructor(options: RegistryOptions = {}) {
         if (options.registryUrl?.endsWith('/'))
@@ -35,7 +57,9 @@ export class Registry {
             this.url = DEFAULT_URL;
 
         this.maxNamespaceSize = options.maxNamespaceSize ?? DEFAULT_NAMESPACE_SIZE;
+        this.publishSizePinned = options.maxPublishSize !== undefined;
         this.maxPublishSize = options.maxPublishSize ?? DEFAULT_PUBLISH_SIZE;
+        this.timeout = options.timeout ?? DEFAULT_TIMEOUT;
         this.username = options.username;
         this.password = options.password;
     }
@@ -45,42 +69,144 @@ export class Registry {
         return url.hostname === 'open-vsx.org' || url.hostname.endsWith('.open-vsx.org');
     }
 
-    createNamespace(name: string, pat: string): Promise<Response> {
+    async createNamespace(name: string, pat: string): Promise<Response> {
         try {
-            const url = this.getUrl(['api', '-', 'namespace', 'create'], { token: pat });
+            const url = this.getUrl(['api', '-', 'namespace', 'create'], await this.tokenQuery(pat));
             const namespace = { name };
-            return this.post(JSON.stringify(namespace), url, {
-                'Content-Type': 'application/json'
+            return await this.post(JSON.stringify(namespace), url, {
+                'Content-Type': 'application/json',
+                ...this.tokenHeaders(pat)
             }, this.maxNamespaceSize);
         } catch (err) {
             return rejectError(err);
         }
     }
 
-    verifyPat(namespace: string, pat: string): Promise<Response> {
+    async verifyPat(namespace: string, pat: string): Promise<Response> {
         try {
-            return this.getJson(this.getUrl(['api', namespace, 'verify-pat'], { token: pat }));
+            const url = this.getUrl(['api', namespace, 'verify-pat'], await this.tokenQuery(pat));
+            return await this.getJson(url, this.tokenHeaders(pat));
         } catch (err) {
             return rejectError(err);
         }
     }
 
-    publish(file: string, pat: string): Promise<Extension> {
+    /**
+     * The size limit that applies to this namespace/extension, which a size override can raise above
+     * the registry default. Neither needs to exist yet - a first publish asks about both before
+     * creating either.
+     */
+    async getSizeLimit(namespace: string, extension: string, pat: string): Promise<SizeLimit> {
         try {
-            const url = this.getUrl(['api', '-', 'publish'], { token: pat });
-            return this.postFile(file, url, {
-                'Content-Type': 'application/octet-stream'
-            }, this.maxPublishSize);
+            const query = { namespace, extension, ...(await this.tokenQuery(pat)) };
+            const url = this.getUrl(['api', '-', 'size-limit'], query);
+            return await this.getJson(url, this.tokenHeaders(pat));
         } catch (err) {
             return rejectError(err);
         }
     }
 
-    getMetadata(namespace: string, extension: string, target?: string): Promise<Extension> {
+    /**
+     * Cached per `Registry` instance once it has succeeded - callers like `tokenQuery` and `unpublish`'s own version check
+     * would otherwise each fetch it separately, doubling the round trip for a single command.
+     */
+    getRegistryVersion(): Promise<RegistryVersion> {
+        try {
+            if (this.registryVersion) {
+                return this.registryVersion;
+            }
+            const pending: Promise<RegistryVersion> = this.getJson(this.getUrl(['api', 'version']));
+            this.registryVersion = pending;
+            // A failure is not remembered, so a later caller asks again rather than inheriting it.
+            pending.catch(() => {
+                if (this.registryVersion === pending) {
+                    this.registryVersion = undefined;
+                }
+            });
+            return pending;
+        } catch (err) {
+            return rejectError(err);
+        }
+    }
+
+    /**
+     * `sizeLimit` is the limit the registry reports for this package, when it could report one. The
+     * transport body cap is raised to it, because a namespace granted more than the default would
+     * otherwise have its upload refused here - by the body size check, before anything reached the
+     * registry that allowed it.
+     */
+    async publish(file: string, pat: string, sizeLimit?: number): Promise<Extension> {
+        try {
+            const url = this.getUrl(['api', '-', 'publish'], await this.tokenQuery(pat));
+            return await this.postFile(file, url, {
+                'Content-Type': 'application/octet-stream',
+                ...this.tokenHeaders(pat)
+            }, this.publishBodyLimit(sizeLimit));
+        } catch (err) {
+            return rejectError(err);
+        }
+    }
+
+    /** The body cap for a publish. A pinned `maxPublishSize` wins; otherwise it never sits below the registry's own limit. */
+    publishBodyLimit(sizeLimit?: number): number {
+        if (this.publishSizePinned || sizeLimit === undefined) {
+            return this.maxPublishSize;
+        }
+        return Math.max(this.maxPublishSize, sizeLimit);
+    }
+
+    requestTrustedPublishingToken(
+        namespace: string,
+        extension: string,
+        idToken: string,
+        registrationCode?: string
+    ): Promise<AccessToken> {
+        try {
+            const url = this.getUrl(['api', '-', 'trusted-publishing', 'token']);
+            const request = { namespace, extension, token: idToken, registrationCode };
+            return this.post(JSON.stringify(request), url, {
+                'Content-Type': 'application/json'
+            }, DEFAULT_TOKEN_REQUEST_SIZE);
+        } catch (err) {
+            return rejectError(err);
+        }
+    }
+
+    /**
+     * Deletes extension versions. Omitting `targetVersions` deletes the extension as a whole,
+     * i.e. all versions the personal access token's user is allowed to delete.
+     */
+    async deleteExtension(
+        namespace: string,
+        extension: string,
+        targetVersions: TargetPlatformVersion[] | undefined,
+        pat: string
+    ): Promise<Response> {
+        try {
+            if (!targetVersions) {
+                const query = { ...await this.tokenQuery(pat), allVersions: 'true' };
+                const url = this.getUrl(['api', namespace, extension, 'delete'], query);
+                return await this.post('', url, this.tokenHeaders(pat), DEFAULT_DELETE_SIZE);
+            }
+
+            const url = this.getUrl(['api', namespace, extension, 'delete'], await this.tokenQuery(pat));
+            return await this.post(JSON.stringify(targetVersions), url, {
+                'Content-Type': 'application/json',
+                ...this.tokenHeaders(pat)
+            }, DEFAULT_DELETE_SIZE);
+        } catch (err) {
+            return rejectError(err);
+        }
+    }
+
+    getMetadata(namespace: string, extension: string, target?: string, version?: string): Promise<Extension> {
         try {
             const segments = ['api', namespace, extension];
             if (target) {
                 segments.push(target);
+            }
+            if (version) {
+                segments.push(version);
             }
             return this.getJson(this.getUrl(segments));
         } catch (err) {
@@ -88,70 +214,182 @@ export class Registry {
         }
     }
 
+    /**
+     * Returns a page of an extension's published versions, newest first, one entry per version and
+     * target platform. `allVersions` on the metadata response carries version numbers and links
+     * only, so this is what makes the target platforms of each version available.
+     */
+    getVersionReferences(
+        namespace: string,
+        extension: string,
+        target: string | undefined,
+        size: number,
+        offset: number
+    ): Promise<VersionReferences> {
+        try {
+            const segments = ['api', namespace, extension];
+            if (target) {
+                segments.push(target);
+            }
+            segments.push('version-references');
+            return this.getJson(this.getUrl(segments, {
+                size: String(size),
+                offset: String(offset)
+            }));
+        } catch (err) {
+            return rejectError(err);
+        }
+    }
+
+    /**
+     * Full-text search across the registry. Returns the purpose-built summary shape rather than
+     * whole extension records, so a page of results stays small.
+     */
+    search(options: SearchQuery): Promise<SearchResult> {
+        try {
+            const query: Record<string, string> = {
+                size: String(options.size),
+                offset: String(options.offset)
+            };
+            if (options.query) {
+                query.query = options.query;
+            }
+            if (options.category) {
+                query.category = options.category;
+            }
+            if (options.targetPlatform) {
+                query.targetPlatform = options.targetPlatform;
+            }
+            if (options.sortBy) {
+                query.sortBy = options.sortBy;
+            }
+            if (options.sortOrder) {
+                query.sortOrder = options.sortOrder;
+            }
+            return this.getJson(this.getUrl(['api', '-', 'search'], query));
+        } catch (err) {
+            return rejectError(err);
+        }
+    }
+
+    /** Returns a namespace and the extensions published in it. */
+    getNamespace(namespace: string): Promise<Namespace> {
+        try {
+            return this.getJson(this.getUrl(['api', namespace]));
+        } catch (err) {
+            return rejectError(err);
+        }
+    }
+
     download(file: string, url: URL): Promise<void> {
         return new Promise((resolve, reject) => {
-            const stream = fs.createWriteStream(file);
-            const requestOptions = this.getRequestOptions();
-            const request = this.getProtocol(url)
-                                .request(url, requestOptions, response => {
-                response.on('end', () => {
-                    if (response.statusCode !== undefined && (response.statusCode < 200 || response.statusCode > 299)) {
-                        reject(statusError(response));
+            // Written beside the target and renamed into place on success, so the caller's path holds
+            // either what it held before or the whole download, never part of one. Deferring the open
+            // until the status is known is not enough on its own: a connection dropped mid-body has
+            // already truncated the file by then, and `get` is handed a path the user chose.
+            const partial = `${file}.part`;
+            let stream: fs.WriteStream | undefined;
+
+            // Claimed synchronously, before the cleanup that has to happen before rejecting. A timeout
+            // mid-body drives both the request's error handler and pipeline's callback, and each used
+            // to wait on its own fs.rm - so whichever landed first decided what the caller was told,
+            // and the partial was removed twice.
+            let failed = false;
+            const fail = (err: Error) => {
+                if (failed) {
+                    return;
+                }
+                failed = true;
+                stream?.destroy();
+                fs.rm(partial, { force: true }, () => reject(err));
+            };
+
+            send(url, this.getRequestOptions(), undefined, response => {
+                if (response.statusCode !== undefined && (response.statusCode < 200 || response.statusCode > 299)) {
+                    response.resume();
+                    // Claimed here so a timeout or reset while the error body drains does not run fail().
+                    // Nothing was written yet, so there is nothing to clean up.
+                    failed = true;
+                    reject(statusError(response));
+                    return;
+                }
+
+                stream = fs.createWriteStream(partial);
+
+                // pipeline rather than response.pipe: pipe installs its own error handler on the
+                // source, so a connection dropped mid-body is swallowed - the write stream is never
+                // ended, nothing settles, and the caller waits for a file that will never arrive.
+                // pipeline propagates that error and tears both ends down. Its callback also waits
+                // for the file to close, which matters in its own right: a write stream opens and
+                // flushes asynchronously, so the last byte having arrived says nothing about the
+                // file being on disk.
+                pipeline(response, stream, (err: NodeJS.ErrnoException | null) => {
+                    if (err) {
+                        fail(err);
+                    } else if (!response.complete) {
+                        // A body cut short still ends the stream cleanly; `complete` is what tells
+                        // that apart from having received all of it.
+                        fail(new Error(`The connection closed before the whole of ${redactUrl(url)} was received.`));
                     } else {
-                        resolve();
+                        fs.rename(partial, file, renameErr => renameErr ? fail(renameErr) : resolve());
                     }
                 });
-                response.pipe(stream);
-            });
-            stream.on('error', (err: Error) => {
-                request.abort();
-                reject(err);
-            });
-            request.on('error', (err: Error) => {
-                stream.close();
-                reject(err);
-            });
-            request.end();
+            }, fail);
         });
     }
 
-    getJson<T extends Response>(url: URL): Promise<T> {
+    getJson<T extends Response>(url: URL, headers?: http.OutgoingHttpHeaders): Promise<T> {
         return new Promise((resolve, reject) => {
-            const requestOptions = this.getRequestOptions();
-            const request = this.getProtocol(url)
-                                .request(url, requestOptions, this.getJsonResponse<T>(resolve, reject));
-            request.on('error', reject);
-            request.end();
+            send(url, this.getRequestOptions('GET', headers), undefined, jsonResponse<T>(resolve, reject), reject);
         });
     }
 
     post<T extends Response>(content: string | Buffer | Uint8Array, url: URL, headers?: http.OutgoingHttpHeaders, maxBodyLength?: number): Promise<T> {
         return new Promise((resolve, reject) => {
-            const requestOptions = this.getRequestOptions('POST', headers, maxBodyLength);
-            const request = this.getProtocol(url)
-                                .request(url, requestOptions, this.getJsonResponse<T>(resolve, reject));
-            request.on('error', reject);
-            request.write(content);
-            request.end();
+            const size = typeof content === 'string' ? Buffer.byteLength(content) : content.byteLength;
+            checkBodySize(size, maxBodyLength);
+            send(url, this.getRequestOptions('POST', headers), () => content, jsonResponse<T>(resolve, reject), reject);
         });
     }
 
-    postFile<T extends Response>(file: string, url: URL, headers?: http.OutgoingHttpHeaders, maxBodyLength?: number): Promise<T> {
+    async postFile<T extends Response>(file: string, url: URL, headers?: http.OutgoingHttpHeaders, maxBodyLength?: number): Promise<T> {
+        checkBodySize((await fs.promises.stat(file)).size, maxBodyLength);
         return new Promise((resolve, reject) => {
-            const stream = fs.createReadStream(file);
-            const requestOptions = this.getRequestOptions('POST', headers, maxBodyLength);
-            const request = this.getProtocol(url)
-                                .request(url, requestOptions, this.getJsonResponse<T>(resolve, reject));
-            stream.on('error', (err: Error) => {
-                request.abort();
-                reject(err);
-            });
-            request.on('error', (err: Error) => {
-                stream.close();
-                reject(err);
-            });
-            stream.on('open', () => stream.pipe(request));
+            // a stream can be read once, so each redirect hop opens the file again
+            send(url, this.getRequestOptions('POST', headers), () => fs.createReadStream(file),
+                jsonResponse<T>(resolve, reject), reject);
         });
+    }
+
+    /**
+     * The header a personal access token travels in. `Authorization: Bearer` is standard and what
+     * log/proxy redaction and secret scanners already expect, so it's preferred - except when
+     * `username`/`password` are set, where `Authorization` is already claimed by Basic auth to a
+     * fronting reverse proxy (see `getRequestOptions`) and the token falls back to `TOKEN_HEADER`.
+     */
+    private tokenHeaders(pat: string): http.OutgoingHttpHeaders {
+        return (this.username && this.password)
+            ? { [TOKEN_HEADER]: pat }
+            : { Authorization: `Bearer ${pat}` };
+    }
+
+    /**
+     * The `token` query parameter to add alongside the header, for registries that predate header
+     * support (see #1344) - empty once the registry is known to be new enough to not need it.
+     *
+     * Best-effort and cached per `Registry` instance: a registry that doesn't expose `/api/version`,
+     * or reports a version that doesn't parse as semver, is assumed too old to know about the header,
+     * same as before this method existed - the query parameter is kept rather than risking a request
+     * that only carries a header such a registry never looks at.
+     */
+    private tokenQuery(pat: string): Promise<Record<string, string>> {
+        return (this.tokenHeaderSupport ??= this.getRegistryVersion()
+            .then(({ version }) => {
+                const parsed = semver.coerce(version);
+                return !!parsed && semver.gte(parsed, MIN_TOKEN_HEADER_REGISTRY_VERSION);
+            })
+            .catch(() => false)
+        ).then(supported => supported ? {} : { token: pat } as Record<string, string>);
     }
 
     private getUrl(segments: string[], query?: Record<string, string>): URL {
@@ -165,11 +403,7 @@ export class Registry {
         return url;
     }
 
-    private getProtocol(url: URL) {
-        return url.protocol === 'https:' ? followRedirects.https : followRedirects.http;
-    }
-
-    private getRequestOptions(method?: string, headers?: http.OutgoingHttpHeaders, maxBodyLength?: number): http.RequestOptions {
+    private getRequestOptions(method?: string, headers?: http.OutgoingHttpHeaders): http.RequestOptions {
         if (this.username && this.password) {
             headers ??= {};
             const credentials = Buffer.from(this.username + ':' + this.password).toString('base64');
@@ -178,43 +412,17 @@ export class Registry {
         return {
             method,
             headers,
-            maxBodyLength
-        } as http.RequestOptions;
-    }
-
-    private getJsonResponse<T extends Response>(resolve: (value: T) => void, reject: (reason: any) => void): (res: http.IncomingMessage) => void {
-        return response => {
-            response.setEncoding('utf-8');
-            let json = '';
-            response.on('data', chunk => json += chunk);
-            response.on('end', () => {
-                if (response.statusCode !== undefined && (response.statusCode < 200 || response.statusCode > 299)) {
-                    if (json.startsWith('{')) {
-                        try {
-                            const parsed = JSON.parse(json) as ErrorResponse;
-                            const message = parsed.message || parsed.error;
-                            if (message) {
-                                reject(new Error(message));
-                                return;
-                            }
-                        } catch (err) {
-                            // Ignore the error and reject with response status
-                        }
-                    }
-                    reject(statusError(response));
-                } else if (json.startsWith('<!DOCTYPE html>')) {
-                    reject(json);
-                } else {
-                    try {
-                        resolve(JSON.parse(json));
-                    } catch (err) {
-                        reject(err);
-                    }
-                }
-            });
+            timeout: this.timeout
         };
     }
 
+}
+
+/** Refuses a request body larger than `maxBodyLength` before anything is sent. */
+function checkBodySize(size: number, maxBodyLength?: number): void {
+    if (maxBodyLength !== undefined && size > maxBodyLength) {
+        throw new Error(`The request body of ${size} bytes is larger than the limit of ${maxBodyLength} bytes.`);
+    }
 }
 
 export interface Response {
@@ -245,8 +453,18 @@ export interface Extension extends Response {
     versionAlias: string[];
     timestamp: string;
     preview?: boolean;
+    preRelease?: boolean;
     displayName?: string;
+    namespaceDisplayName?: string;
     description?: string;
+    deprecated?: boolean;
+    replacement?: ExtensionReplacement;
+    downloadable?: boolean;
+    publishedWithTrustedPublishing?: boolean;
+    namespaceOwnershipConflict?: boolean;
+    extensionKind?: string[];
+    localizedLanguages?: string[];
+    sponsorLink?: string;
 
     // key: engine, value: version constraint
     engines?: { [engine: string]: string };
@@ -265,6 +483,30 @@ export interface Extension extends Response {
     bundledExtensions?: ExtensionReference[];
 }
 
+export interface RegistryVersion extends Response {
+    version: string;
+    maxExtensionSize: number;
+    trustedPublishingAudience?: string;
+}
+
+export interface SizeLimit extends Response {
+    maxSize: number;
+}
+
+export interface AccessToken extends Response {
+    id: number;
+    value?: string;
+    description: string;
+    createdTimestamp: string;
+    accessedTimestamp?: string;
+    expiresTimestamp?: string;
+}
+
+export interface TargetPlatformVersion {
+    version: string;
+    targetPlatform?: string;
+}
+
 export interface UserData {
     loginName: string;
     fullName?: string;
@@ -276,6 +518,64 @@ export interface Badge {
     url: string;
     href: string;
     description: string;
+}
+
+export interface ExtensionReplacement {
+    url: string;
+    displayName?: string;
+}
+
+export interface VersionReference {
+    url: string;
+    files: { [type: string]: string };
+    version: string;
+    targetPlatform?: string;
+    engines?: { [engine: string]: string };
+}
+
+export interface VersionReferences extends Response {
+    offset: number;
+    totalSize: number;
+    versions?: VersionReference[];
+}
+
+export interface SearchQuery {
+    query?: string;
+    category?: string;
+    targetPlatform?: string;
+    sortBy?: string;
+    sortOrder?: string;
+    size: number;
+    offset: number;
+}
+
+export interface SearchEntry {
+    url: string;
+    files: { [type: string]: string };
+    name: string;
+    namespace: string;
+    version: string;
+    timestamp: string;
+    verified?: boolean;
+    averageRating?: number;
+    reviewCount?: number;
+    downloadCount: number;
+    displayName?: string;
+    description?: string;
+    deprecated?: boolean;
+}
+
+export interface SearchResult extends Response {
+    offset: number;
+    totalSize: number;
+    extensions?: SearchEntry[];
+}
+
+export interface Namespace extends Response {
+    name: string;
+    verified?: boolean;
+    // key: extension name, value: url
+    extensions?: { [name: string]: string };
 }
 
 export interface ExtensionReference {

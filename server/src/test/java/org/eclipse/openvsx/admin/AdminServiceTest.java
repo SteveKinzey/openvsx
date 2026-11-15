@@ -1,0 +1,858 @@
+/******************************************************************************
+ * Copyright (c) 2026 Eclipse Foundation and others
+ *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
+ * This program and the accompanying materials are made available under the
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
+ *
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
+package org.eclipse.openvsx.admin;
+
+import java.util.Collections;
+import java.util.List;
+import java.util.Set;
+
+import jakarta.persistence.EntityManager;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InjectMocks;
+import org.mockito.Mock;
+import org.mockito.Spy;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.context.ApplicationEventPublisher;
+import org.springframework.data.domain.PageImpl;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.util.Streamable;
+import org.springframework.http.HttpStatus;
+
+import org.eclipse.openvsx.ExtensionService;
+import org.eclipse.openvsx.UserService;
+import org.eclipse.openvsx.entities.Extension;
+import org.eclipse.openvsx.entities.ExtensionVersion;
+import org.eclipse.openvsx.entities.ExtensionVersionChange;
+import org.eclipse.openvsx.entities.ExtensionVersionState;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.entities.NamespaceMembership;
+import org.eclipse.openvsx.entities.Permission;
+import org.eclipse.openvsx.entities.UserData;
+import org.eclipse.openvsx.json.UserAccessJson;
+import org.eclipse.openvsx.mail.MailService;
+import org.eclipse.openvsx.publisheragreement.PublisherAgreementService;
+import org.eclipse.openvsx.repositories.RepositoryService;
+import org.eclipse.openvsx.util.ErrorResultException;
+import org.eclipse.openvsx.util.LogService;
+import org.eclipse.openvsx.util.TargetPlatform;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+/**
+ * Unit tests for {@link AdminService}.
+ * <p>
+ * Mainly {@link AdminService#purgeExtensionAndReferencingExtensions(UserData, String, String)}: the cascade
+ * that purges an extension together with every extension that references it (packs bundling it, extensions
+ * depending on it), walking the reverse-reference direction.
+ */
+@ExtendWith(MockitoExtension.class)
+class AdminServiceTest {
+
+    private static final String NAMESPACE = "n";
+
+    @Mock
+    RepositoryService repositories;
+
+    @Mock
+    ExtensionService extensions;
+
+    @Mock
+    PublisherAgreementService publisherAgreements;
+
+    @Mock
+    LogService logs;
+
+    @Mock
+    UserService users;
+
+    @Mock
+    EntityManager entityManager;
+
+    @Mock
+    ApplicationEventPublisher events;
+
+    @Mock
+    MailService mail;
+
+    @Spy
+    PermissionRegistry permissionRegistry = new PermissionRegistry(
+            List.of(
+                    new BuiltInPermissions(),
+                    () -> List.of(new PermissionInfo(Permission.of("manage_widgets"), "Manage widgets"))));
+
+    @InjectMocks
+    AdminService adminService;
+
+    // A real ADMIN, not a bare row: these methods are called with the caller the API resolved, and
+    // some of them now refuse a caller who is not one (see checkMayStripAccessOf).
+    private final UserData admin = adminUser();
+
+    private static UserData adminUser() {
+        var user = new UserData();
+        user.setRole(UserData.Role.ADMIN);
+        return user;
+    }
+    private long idSequence = 0;
+
+    private Extension extension(String name) {
+        var namespace = new Namespace();
+        namespace.setName(NAMESPACE);
+        var extension = new Extension();
+        extension.setId(++idSequence);
+        extension.setName(name);
+        extension.setNamespace(namespace);
+        return extension;
+    }
+
+    private ExtensionVersion version(Extension extension) {
+        var extVersion = new ExtensionVersion();
+        extVersion.setId(++idSequence);
+        extVersion.setExtension(extension);
+        extVersion.setVersion("1.0.0");
+        extVersion.setTargetPlatform(TargetPlatform.NAME_UNIVERSAL);
+        return extVersion;
+    }
+
+    private void mockNoReferences(Extension extension) {
+        when(repositories.findBundledExtensionsReference(extension)).thenReturn(Streamable.empty());
+        when(repositories.findDependenciesReference(extension)).thenReturn(Streamable.empty());
+    }
+
+    @Test
+    void revokingPublisherContributionsRemovesEachMembershipThroughUserService() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        var namespace = new Namespace();
+        namespace.setName(NAMESPACE);
+        var membership = new NamespaceMembership();
+        membership.setUser(user);
+        membership.setNamespace(namespace);
+        membership.setRole(NamespaceMembership.ROLE_OWNER);
+
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+        when(repositories.findPersonalAccessTokens(user)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, true)).thenReturn(Streamable.empty());
+        when(repositories.findMemberships(user)).thenReturn(Streamable.of(membership));
+
+        var result = adminService.revokePublisherContributions("github", "amy", admin);
+
+        // handing over the row we already hold is what keeps one unremovable membership from aborting the
+        // whole revoke, and going through UserService is what deletes the trusted publishers with it
+        verify(users).removeNamespaceMembership(membership);
+        assertThat(result.getSuccess()).contains("removed 1 namespace memberships");
+    }
+
+    @Test
+    void revokingPublisherContributionsRecordsWhenTheVersionsStoppedBeingVisible() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        var extVersion = version(extension("ext"));
+        extVersion.setActive(true);
+
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+        when(repositories.findPersonalAccessTokens(user)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, true)).thenReturn(Streamable.of(extVersion));
+
+        adminService.revokePublisherContributions("github", "amy", admin);
+
+        assertThat(extVersion.isActive()).isFalse();
+        assertThat(extVersion.isRemoved()).isFalse();
+        // The version stops being publicly visible without being removed. Unless that transition is
+        // appended to the log, the changes feed would keep reporting the version as active and
+        // consumers following the feed would never learn that it disappeared.
+        verify(repositories).recordExtensionVersionChange(
+                eq(extVersion),
+                eq(ExtensionVersionState.INACTIVE),
+                any());
+    }
+
+    // Regression: revokePublisherAgreement used to be called unguarded, so any exception it threw
+    // (agreement service down, unexpected runtime error, ...) rolled back the whole revoke, including the
+    // token/extension/membership cleanup that has nothing to do with it.
+    @Test
+    void revokingPublisherContributionsStillDeactivatesEverythingElseWhenTheAgreementRevokeFails() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        var extVersion = version(extension("ext"));
+        extVersion.setActive(true);
+
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+        when(repositories.findPersonalAccessTokens(user)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, true)).thenReturn(Streamable.of(extVersion));
+        doThrow(new RuntimeException("Agreement service is down")).when(publisherAgreements)
+                .revoke(user, admin);
+
+        var result = adminService.revokePublisherContributions("github", "amy", admin);
+
+        assertThat(extVersion.isActive()).isFalse();
+        verify(repositories).recordExtensionVersionChange(
+                eq(extVersion),
+                eq(ExtensionVersionState.INACTIVE),
+                any());
+        // The failure is reported back rather than silently dropped or failing the whole call.
+        assertThat(result.getError()).isNull();
+        assertThat(result.getWarning()).contains("Agreement service is down");
+    }
+
+    @Test
+    void forgetUserDeletesTheUserRowWhenNothingElseReferencesThem() {
+        var user = new UserData();
+        user.setId(42L);
+        user.setLoginName("amy");
+
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+        when(repositories.findMemberships(user)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, true)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, false)).thenReturn(Streamable.empty());
+        when(repositories.findPersonalAccessTokens(user)).thenReturn(Streamable.empty());
+
+        adminService.forgetUser("github", "amy", admin);
+
+        verify(entityManager).remove(user);
+        verify(events).publishEvent(new UserForgottenEvent(user.getId()));
+    }
+
+    // Regression: extension_version.published_by_id is documented as permanent - it is never
+    // cleared, not even once the version itself is soft-deleted - and has a foreign key with no ON
+    // DELETE clause. A version this user published, but which was already removed by someone else
+    // (e.g. an admin) before this call, is not touched by the delete-all-versions loop above (it
+    // early-returns for already-removed versions without reassigning removedBy), so it must still
+    // block a hard delete of the row, or entityManager.remove(user) would violate that FK.
+    @Test
+    void forgetUserAnonymizesInsteadOfDeletingWhenAVersionWasAlreadyRemovedBySomeoneElse() {
+        var user = new UserData();
+        user.setId(43L);
+        user.setLoginName("amy");
+        var admin2 = new UserData();
+        admin2.setLoginName("staff");
+
+        var extVersion = version(extension("ext"));
+        extVersion.setPublishedBy(user);
+        extVersion.setActive(false);
+        extVersion.setRemoved(true);
+        extVersion.setRemovedBy(admin2);
+
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+        when(repositories.findMemberships(user)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, true)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, false)).thenReturn(Streamable.of(extVersion));
+        when(repositories.findPersonalAccessTokens(user)).thenReturn(Streamable.empty());
+
+        adminService.forgetUser("github", "amy", admin);
+
+        verify(entityManager, never()).remove(user);
+        assertThat(user.getLoginName()).isEqualTo("deleted-user-" + user.getId());
+        assertThat(user.getFullName()).isNull();
+        verify(events).publishEvent(new UserForgottenEvent(user.getId()));
+    }
+
+    // A tombstone that keeps its permissions would still be an account holding admin access, and one
+    // that no longer shows up under any role while doing so.
+    @Test
+    void forgetUserStripsPermissionsFromTheAnonymizedRow() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        user.setRole(UserData.Role.PRIVILEGED);
+        user.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+
+        var extVersion = version(extension("ext"));
+        extVersion.setPublishedBy(user);
+        extVersion.setRemoved(true);
+        extVersion.setRemovedBy(admin);
+
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+        when(repositories.findMemberships(user)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, true)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(user, false)).thenReturn(Streamable.of(extVersion));
+        when(repositories.findPersonalAccessTokens(user)).thenReturn(Streamable.empty());
+
+        adminService.forgetUser("github", "amy", admin);
+
+        verify(entityManager, never()).remove(user);
+        assertThat(user.getRole()).isNull();
+        assertThat(user.getPermissions()).isEmpty();
+    }
+
+    // The search goes through a jOOQ query that selects user_data columns only, so the users it
+    // returns never carry permissions - they have to be loaded separately to reach the JSON.
+    @Test
+    void searchUsersReportsPermissionsTheJooqQueryDoesNotSelect() {
+        var fromSearch = new UserData();
+        fromSearch.setId(7);
+        fromSearch.setLoginName("amy");
+        fromSearch.setProvider("github");
+
+        var withPermissions = new UserData();
+        withPermissions.setId(7);
+        withPermissions.setLoginName("amy");
+        withPermissions.getPermissions().add(Permission.MANAGE_SCANS);
+
+        var pageable = Pageable.ofSize(10);
+        when(repositories.searchUsers(null, null, null, pageable))
+                .thenReturn(new PageImpl<>(List.of(fromSearch), pageable, 1));
+        when(repositories.findUsersById(List.of(7L))).thenReturn(List.of(withPermissions));
+        when(repositories.findMemberships(fromSearch)).thenReturn(Streamable.empty());
+
+        var page = adminService.searchUsers(null, null, null, pageable);
+
+        assertThat(page.getContent()).singleElement()
+                .extracting(json -> json.getUser().getPermissions())
+                .isEqualTo(Set.of("manage_scans"));
+    }
+
+    @Test
+    void searchUsersNormalizesPermissionFilter() {
+        var pageable = Pageable.ofSize(10);
+        when(repositories.searchUsers(null, null, List.of("manage_scans"), pageable))
+                .thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+        adminService.searchUsers(null, null, "MANAGE_SCANS", pageable);
+
+        verify(repositories).searchUsers(null, null, List.of("manage_scans"), pageable);
+    }
+
+    @Test
+    void searchUsersExpandsAnyToTheRegisteredPermissions() {
+        var pageable = Pageable.ofSize(10);
+        var registered = permissionRegistry.all().stream().map(info -> info.permission().toString()).toList();
+        when(repositories.searchUsers(null, null, registered, pageable))
+                .thenReturn(new PageImpl<>(List.of(), pageable, 0));
+
+        adminService.searchUsers(null, null, "ANY", pageable);
+
+        assertThat(registered).contains("manage_scans", "manage_widgets").doesNotContain("any");
+        verify(repositories).searchUsers(null, null, registered, pageable);
+    }
+
+    @Test
+    void searchUsersRejectsUnknownPermissionFilter() {
+        assertThatThrownBy(() -> adminService.searchUsers(null, null, "bogus", Pageable.ofSize(10)))
+                .isInstanceOf(ErrorResultException.class)
+                .hasMessage("Invalid permission: bogus");
+    }
+
+    @Test
+    void purgesReferencingExtensionAsWholeWhenAllVersionsReference() {
+        var target = extension("target");
+        var referencing = extension("referencing");
+        // The referencing extension has two versions, both bundling the target.
+        var refV1 = version(referencing);
+        var refV2 = version(referencing);
+
+        when(extensions.lockExtension(NAMESPACE, "target")).thenReturn(target);
+        when(repositories.findBundledExtensionsReference(target)).thenReturn(Streamable.of(refV1, refV2));
+        when(repositories.findDependenciesReference(target)).thenReturn(Streamable.empty());
+        when(repositories.countVersions(NAMESPACE, "referencing")).thenReturn(2);
+        mockNoReferences(referencing);
+
+        adminService.purgeExtensionAndReferencingExtensions(admin, NAMESPACE, "target");
+
+        // The referencing extension is purged as a whole (not version-by-version) so nothing is orphaned.
+        verify(extensions).purgeExtension(admin, referencing, false);
+        verify(extensions).purgeExtension(admin, target, false);
+        verify(extensions, never()).purgeExtensionVersion(any(), any());
+    }
+
+    @Test
+    void purgesOnlyReferencingVersionsWhenSomeVersionsReference() {
+        var target = extension("target");
+        var referencing = extension("referencing");
+        // Only one of the referencing extension's three versions bundles the target.
+        var refV1 = version(referencing);
+
+        when(extensions.lockExtension(NAMESPACE, "target")).thenReturn(target);
+        when(repositories.findBundledExtensionsReference(target)).thenReturn(Streamable.of(refV1));
+        when(repositories.findDependenciesReference(target)).thenReturn(Streamable.empty());
+        when(repositories.countVersions(NAMESPACE, "referencing")).thenReturn(3);
+
+        adminService.purgeExtensionAndReferencingExtensions(admin, NAMESPACE, "target");
+
+        // Only the referencing version is purged; the extension keeps its other versions.
+        verify(extensions).purgeExtensionVersion(admin, refV1);
+        verify(extensions, never()).purgeExtension(admin, referencing, false);
+        verify(extensions).purgeExtension(admin, target, false);
+    }
+
+    @Test
+    void handlesReferenceCyclesWithoutInfiniteRecursion() {
+        // a and b bundle each other; both are single-version extensions.
+        var a = extension("a");
+        var b = extension("b");
+        var aV = version(a);
+        var bV = version(b);
+
+        when(extensions.lockExtension(NAMESPACE, "a")).thenReturn(a);
+        // versions bundling a -> b's version; versions bundling b -> a's version
+        when(repositories.findBundledExtensionsReference(a)).thenReturn(Streamable.of(bV));
+        when(repositories.findDependenciesReference(a)).thenReturn(Streamable.empty());
+        when(repositories.findBundledExtensionsReference(b)).thenReturn(Streamable.of(aV));
+        when(repositories.findDependenciesReference(b)).thenReturn(Streamable.empty());
+        when(repositories.countVersions(NAMESPACE, "a")).thenReturn(1);
+        when(repositories.countVersions(NAMESPACE, "b")).thenReturn(1);
+
+        assertThatCode(() -> adminService.purgeExtensionAndReferencingExtensions(admin, NAMESPACE, "a"))
+                .doesNotThrowAnyException();
+
+        verify(extensions).purgeExtension(admin, a, false);
+        verify(extensions).purgeExtension(admin, b, false);
+        verify(extensions, never()).purgeExtensionVersion(any(), any());
+    }
+
+    @Test
+    void purgesDeepReferenceChainWithoutDepthLimit() {
+        // Chain of 8 single-version extensions where each references the previous one; the previous
+        // depth limit (> 5) would have aborted this legitimate chain, the visited-set does not.
+        var chain = new Extension[8];
+        var chainVersions = new ExtensionVersion[8];
+        for (var i = 0; i < chain.length; i++) {
+            chain[i] = extension("e" + i);
+            chainVersions[i] = version(chain[i]);
+        }
+
+        when(extensions.lockExtension(NAMESPACE, "e0")).thenReturn(chain[0]);
+        for (var i = 0; i < chain.length; i++) {
+            // chain[i+1] references chain[i]
+            when(repositories.findBundledExtensionsReference(chain[i]))
+                    .thenReturn(i + 1 < chain.length ? Streamable.of(chainVersions[i + 1]) : Streamable.empty());
+            when(repositories.findDependenciesReference(chain[i])).thenReturn(Streamable.empty());
+            if (i > 0) {
+                when(repositories.countVersions(NAMESPACE, "e" + i)).thenReturn(1);
+            }
+        }
+
+        assertThatCode(() -> adminService.purgeExtensionAndReferencingExtensions(admin, NAMESPACE, "e0"))
+                .doesNotThrowAnyException();
+
+        for (var extension : chain) {
+            verify(extensions).purgeExtension(admin, extension, false);
+        }
+    }
+
+    @Test
+    void searchUsersOmitsAPermissionNoProviderRegisters() {
+        var user = new UserData();
+        user.setId(7);
+        user.setLoginName("amy");
+        user.getPermissions().add(Permission.MANAGE_SCANS);
+        user.getPermissions().add(Permission.of("manage_rate_limits"));
+
+        var pageable = Pageable.ofSize(10);
+        when(repositories.searchUsers(null, null, null, pageable))
+                .thenReturn(new PageImpl<>(List.of(user), pageable, 1));
+        when(repositories.findUsersById(List.of(7L))).thenReturn(List.of(user));
+        when(repositories.findMemberships(user)).thenReturn(Streamable.empty());
+
+        var page = adminService.searchUsers(null, null, null, pageable);
+
+        assertThat(page.getContent()).singleElement()
+                .extracting(json -> json.getUser().getPermissions())
+                .isEqualTo(Set.of("manage_scans"));
+    }
+
+    // The webui sends back what the user JSON listed, so a stale grant is simply left out of the save.
+    @Test
+    void updateUserAccessDropsAPermissionNoProviderRegisters() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        user.getPermissions().add(Permission.MANAGE_SCANS);
+        user.getPermissions().add(Permission.of("manage_rate_limits"));
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        var result = adminService
+                .updateUserAccess("github", "amy", new UserAccessJson("none", List.of("manage_scans")), admin);
+
+        assertThat(result.getError()).isNull();
+        assertThat(user.getPermissions()).containsExactly(Permission.MANAGE_SCANS);
+    }
+
+    @Test
+    void updateUserAccessAppliesTheRoleAndPermissionsTogether() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        user.getPermissions().add(Permission.MANAGE_CACHES);
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        var access = new UserAccessJson("privileged", List.of("manage_extensions"));
+        var result = adminService.updateUserAccess("github", "amy", access, admin);
+
+        assertThat(user.getRole()).isEqualTo(UserData.Role.PRIVILEGED);
+        assertThat(user.getPermissions()).containsExactly(Permission.MANAGE_EXTENSIONS);
+        assertThat(result.getSuccess())
+                .contains("set the role to privileged", "granted manage_extensions", "revoked manage_caches");
+    }
+
+    @Test
+    void updateUserAccessRevokesEverythingWhenAnEmptyPermissionListIsGiven() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        user.getPermissions().add(Permission.MANAGE_EXTENSIONS);
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        adminService.updateUserAccess("github", "amy", new UserAccessJson("none", List.of()), admin);
+
+        assertThat(user.getPermissions()).isEmpty();
+    }
+
+    /**
+     * A partial body must not be read as a request to strip what it leaves out: this replaces the
+     * whole access state, so an omitted field would otherwise demote the user by accident.
+     */
+    @Test
+    void updateUserAccessRejectsABodyMissingEitherField() {
+        assertThatThrownBy(
+                () -> adminService.updateUserAccess("github", "amy", new UserAccessJson(null, List.of()), admin))
+                .isInstanceOf(ErrorResultException.class)
+                .hasMessageContaining("Missing role");
+        assertThatThrownBy(
+                () -> adminService.updateUserAccess("github", "amy", new UserAccessJson("none", null), admin))
+                .isInstanceOf(ErrorResultException.class)
+                .hasMessageContaining("Missing permissions");
+
+        verify(repositories, never()).findUserByLoginName(any(), any());
+    }
+
+    @Test
+    void updateUserAccessRejectsNullPermissionWith400() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        var access = new UserAccessJson("none", Collections.singletonList(null));
+        assertThatThrownBy(() -> adminService.updateUserAccess("github", "amy", access, admin))
+                .isInstanceOf(ErrorResultException.class)
+                .hasMessageContaining("Invalid permission")
+                .extracting(e -> ((ErrorResultException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
+    @Test
+    void updateUserAccessRejectsUnregisteredPermissionWith400() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        for (var name : List.of("manage_webhooks", " ", "")) {
+            var access = new UserAccessJson("none", List.of(name));
+            assertThatThrownBy(() -> adminService.updateUserAccess("github", "amy", access, admin))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("Invalid permission")
+                    .extracting(e -> ((ErrorResultException) e).getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+        }
+        assertThat(user.getPermissions()).isEmpty();
+    }
+
+    @Test
+    void updateUserAccessAcceptsPermissionFromAnotherProvider() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        var access = new UserAccessJson("none", List.of("Manage_Widgets", "manage_caches"));
+        var result = adminService.updateUserAccess("github", "amy", access, admin);
+
+        assertThat(user.getPermissions())
+                .containsExactlyInAnyOrder(Permission.of("manage_widgets"), Permission.MANAGE_CACHES);
+        assertThat(result.getSuccess()).contains("granted manage_caches, manage_widgets");
+    }
+
+    @Test
+    void updateUserAccessReportsWhenThereIsNothingToApply() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        user.setRole(UserData.Role.ADMIN);
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        var access = new UserAccessJson("admin", List.of());
+        assertThat(adminService.updateUserAccess("github", "amy", access, admin).getSuccess())
+                .isEqualTo("No access changes for user github/amy.");
+        verify(logs, never()).logAction(any(), any());
+    }
+
+    @Test
+    void updateUserAccessRejectsAnUnknownPermissionName() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        var access = new UserAccessJson("none", List.of("not-a-permission"));
+        assertThatThrownBy(() -> adminService.updateUserAccess("github", "amy", access, admin))
+                .isInstanceOf(ErrorResultException.class);
+    }
+
+    /** A rejected permission must not leave the role already applied - they save as one change. */
+    @Test
+    void updateUserAccessLeavesTheRoleUntouchedWhenAPermissionIsRejected() {
+        var user = new UserData();
+        user.setLoginName("amy");
+        when(repositories.findUserByLoginName("github", "amy")).thenReturn(user);
+
+        var access = new UserAccessJson("admin", List.of("not-a-permission"));
+        assertThatThrownBy(() -> adminService.updateUserAccess("github", "amy", access, admin))
+                .isInstanceOf(ErrorResultException.class);
+
+        assertThat(user.getRole()).isNull();
+    }
+
+    @Test
+    void checkPermissionAllowsAUserIndividuallyGrantedIt() {
+        var user = new UserData();
+        user.getPermissions().add(Permission.MANAGE_CACHES);
+        when(users.findLoggedInUser()).thenReturn(user);
+
+        assertThat(adminService.checkPermission(Permission.MANAGE_CACHES)).isSameAs(user);
+    }
+
+    /**
+     * MANAGE_PUBLISHERS is delegated for publisher support on ordinary accounts. Letting it strip
+     * another admin's access would hand it the privilege-escalation step updateUserAccess reserves
+     * for admins: forget every admin in turn and nobody can grant access back.
+     */
+    @Test
+    void forgetUserRefusesAUserWithAccessWhenTheCallerIsNotAnAdmin() {
+        var caller = new UserData();
+        caller.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+        var target = new UserData();
+        target.setLoginName("root");
+        target.setRole(UserData.Role.ADMIN);
+        when(repositories.findUserByLoginName("github", "root")).thenReturn(target);
+
+        assertThatThrownBy(() -> adminService.forgetUser("github", "root", caller))
+                .isInstanceOf(ErrorResultException.class)
+                .hasMessageContaining("Administration role is required");
+
+        assertThat(target.getRole()).isEqualTo(UserData.Role.ADMIN);
+        verify(entityManager, never()).remove(any());
+    }
+
+    @Test
+    void forgetUserRefusesATargetHoldingOnlyAPermission() {
+        var caller = new UserData();
+        caller.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+        var target = new UserData();
+        target.setLoginName("sam");
+        target.getPermissions().add(Permission.MANAGE_SCANS);
+        when(repositories.findUserByLoginName("github", "sam")).thenReturn(target);
+
+        assertThatThrownBy(() -> adminService.forgetUser("github", "sam", caller))
+                .isInstanceOf(ErrorResultException.class);
+
+        assertThat(target.getPermissions()).containsExactly(Permission.MANAGE_SCANS);
+    }
+
+    @Test
+    void revokePublisherTokensAllowsADelegateWhenTheTargetHoldsOnlyAnUnregisteredGrant() {
+        var caller = new UserData();
+        caller.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+        var target = new UserData();
+        target.setLoginName("sam");
+        target.getPermissions().add(Permission.of("manage_rate_limits"));
+        when(repositories.findUserByLoginName("github", "sam")).thenReturn(target);
+
+        var result = adminService.revokePublisherTokens("github", "sam", caller);
+
+        assertThat(result.getError()).isNull();
+    }
+
+    @Test
+    void forgetUserAllowsAnAdminToActOnAnotherAdmin() {
+        var caller = new UserData();
+        caller.setRole(UserData.Role.ADMIN);
+        var target = new UserData();
+        target.setLoginName("root");
+        target.setRole(UserData.Role.ADMIN);
+        when(repositories.findUserByLoginName("github", "root")).thenReturn(target);
+        when(repositories.findMemberships(target)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(target, true)).thenReturn(Streamable.empty());
+        when(repositories.findVersionsByUser(target, false)).thenReturn(Streamable.empty());
+        when(repositories.findPersonalAccessTokens(target)).thenReturn(Streamable.empty());
+
+        assertThatCode(() -> adminService.forgetUser("github", "root", caller)).doesNotThrowAnyException();
+    }
+
+    @Test
+    void revokePublisherContributionsRefusesAnAdminTargetForANonAdminCaller() {
+        var caller = new UserData();
+        caller.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+        var target = new UserData();
+        target.setLoginName("root");
+        target.setRole(UserData.Role.ADMIN);
+        when(repositories.findUserByLoginName("github", "root")).thenReturn(target);
+
+        assertThatThrownBy(() -> adminService.revokePublisherContributions("github", "root", caller))
+                .isInstanceOf(ErrorResultException.class);
+
+        verify(repositories, never()).deactivatePersonalAccessTokens(any());
+    }
+
+    @Test
+    void reinstateRefusesAnAdminTargetForANonAdminCaller() {
+        var caller = new UserData();
+        caller.setId(1);
+        caller.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+        var target = new UserData();
+        target.setId(2);
+        target.setLoginName("root");
+        target.setRole(UserData.Role.ADMIN);
+        when(repositories.findUserByLoginName("github", "root")).thenReturn(target);
+
+        assertThatThrownBy(() -> adminService.reinstatePublisherAgreement("github", "root", caller))
+                .isInstanceOf(ErrorResultException.class);
+
+        verify(publisherAgreements, never()).reinstate(any(), any());
+    }
+
+    /** A delegate who was revoked must not be able to lift their own block. */
+    @Test
+    void reinstateRefusesTheCallerReinstatingThemselves() {
+        var caller = new UserData();
+        caller.setId(1);
+        caller.setLoginName("sam");
+        caller.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+        when(repositories.findUserByLoginName("github", "sam")).thenReturn(caller);
+
+        assertThatThrownBy(() -> adminService.reinstatePublisherAgreement("github", "sam", caller))
+                .isInstanceOf(ErrorResultException.class);
+
+        verify(publisherAgreements, never()).reinstate(any(), any());
+    }
+
+    @Test
+    void reinstateLetsAnAdminReinstateThemselves() {
+        var caller = new UserData();
+        caller.setId(1);
+        caller.setLoginName("root");
+        caller.setRole(UserData.Role.ADMIN);
+        when(repositories.findUserByLoginName("github", "root")).thenReturn(caller);
+
+        adminService.reinstatePublisherAgreement("github", "root", caller);
+
+        verify(publisherAgreements).reinstate(caller, caller);
+    }
+
+    @Test
+    void reinstateLetsAnAdminReinstateAnotherUser() {
+        var caller = new UserData();
+        caller.setId(1);
+        caller.setRole(UserData.Role.ADMIN);
+        var target = new UserData();
+        target.setId(2);
+        target.setLoginName("sam");
+        when(repositories.findUserByLoginName("github", "sam")).thenReturn(target);
+
+        adminService.reinstatePublisherAgreement("github", "sam", caller);
+
+        verify(publisherAgreements).reinstate(target, caller);
+    }
+
+    @Test
+    void revokePublisherTokensRefusesAnAdminTargetForANonAdminCaller() {
+        var caller = new UserData();
+        caller.getPermissions().add(Permission.MANAGE_PUBLISHERS);
+        var target = new UserData();
+        target.setLoginName("root");
+        target.setRole(UserData.Role.ADMIN);
+        when(repositories.findUserByLoginName("github", "root")).thenReturn(target);
+
+        assertThatThrownBy(() -> adminService.revokePublisherTokens("github", "root", caller))
+                .isInstanceOf(ErrorResultException.class);
+
+        verify(repositories, never()).deactivatePersonalAccessTokens(any());
+    }
+
+    @Test
+    void checkAnyPermissionAllowsAUserHoldingEitherOne() {
+        var user = new UserData();
+        user.getPermissions().add(Permission.MANAGE_EXTENSIONS);
+        when(users.findLoggedInUser()).thenReturn(user);
+
+        assertThat(adminService.checkAnyPermission(Permission.MANAGE_NAMESPACES, Permission.MANAGE_EXTENSIONS))
+                .isSameAs(user);
+    }
+
+    @Test
+    void checkAnyPermissionRejectsAUserHoldingNeither() {
+        var user = new UserData();
+        user.getPermissions().add(Permission.MANAGE_CACHES);
+        when(users.findLoggedInUser()).thenReturn(user);
+
+        assertThatThrownBy(
+                () -> adminService.checkAnyPermission(Permission.MANAGE_NAMESPACES, Permission.MANAGE_EXTENSIONS))
+                .isInstanceOf(ErrorResultException.class)
+                .hasMessageContaining("manage_namespaces or manage_extensions");
+    }
+
+    // Regression: ADMIN must keep implying every permission, including ones a currently-ADMIN user
+    // was never individually granted - see UserData#hasPermission.
+    @Test
+    void checkPermissionAllowsAdminRegardlessOfIndividualGrants() {
+        var user = new UserData();
+        user.setRole(UserData.Role.ADMIN);
+        when(users.findLoggedInUser()).thenReturn(user);
+
+        assertThat(adminService.checkPermission(Permission.MANAGE_SETTINGS)).isSameAs(user);
+    }
+
+    @Test
+    void checkPermissionRejectsAUserLackingThePermission() {
+        var user = new UserData();
+        when(users.findLoggedInUser()).thenReturn(user);
+
+        assertThatThrownBy(() -> adminService.checkPermission(Permission.MANAGE_SETTINGS))
+                .isInstanceOf(ErrorResultException.class);
+    }
+
+    @Test
+    void checksAnswer401WhenNobodyIsLoggedIn() {
+        // findLoggedInUser() is unstubbed, so it returns null
+        assertThatThrownBy(() -> adminService.checkAdminUser())
+                .isInstanceOfSatisfying(
+                        ErrorResultException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        assertThatThrownBy(() -> adminService.checkPermission(Permission.MANAGE_SETTINGS))
+                .isInstanceOfSatisfying(
+                        ErrorResultException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+        assertThatThrownBy(
+                () -> adminService.checkAnyPermission(Permission.MANAGE_NAMESPACES, Permission.MANAGE_EXTENSIONS))
+                .isInstanceOfSatisfying(
+                        ErrorResultException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.UNAUTHORIZED));
+    }
+
+    @Test
+    void checksAnswer403ToALoggedInUserWithoutAccess() {
+        when(users.findLoggedInUser()).thenReturn(new UserData());
+
+        assertThatThrownBy(() -> adminService.checkAdminUser())
+                .isInstanceOfSatisfying(
+                        ErrorResultException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(() -> adminService.checkPermission(Permission.MANAGE_SETTINGS))
+                .isInstanceOfSatisfying(
+                        ErrorResultException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+        assertThatThrownBy(
+                () -> adminService.checkAnyPermission(Permission.MANAGE_NAMESPACES, Permission.MANAGE_EXTENSIONS))
+                .isInstanceOfSatisfying(
+                        ErrorResultException.class,
+                        e -> assertThat(e.getStatus()).isEqualTo(HttpStatus.FORBIDDEN));
+    }
+}

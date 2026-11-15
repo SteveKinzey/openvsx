@@ -8,10 +8,17 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
+import '@fontsource-variable/geist/index.css';
+import '@fontsource-variable/geist-mono/index.css';
+import '@fontsource/roboto/300.css';
+import '@fontsource/roboto/400.css';
+import '@fontsource/roboto/500.css';
+import '@fontsource/roboto/700.css';
+import '../main.css';
 import { createRoot } from 'react-dom/client';
 import { useMemo } from 'react';
 import { HelmetProvider } from 'react-helmet-async';
-import { BrowserRouter } from 'react-router-dom';
+import { BrowserRouter } from 'react-router';
 import { ThemeProvider } from '@mui/material/styles';
 import useMediaQuery from '@mui/material/useMediaQuery';
 import { ExtensionRegistryService } from '../extension-registry-service';
@@ -21,7 +28,6 @@ import createDefaultTheme from './theme';
 
 // This is the default entry point for the webui Docker image and for development.
 // The production code for open-vsx.org is at https://github.com/eclipse/open-vsx.org
-
 
 let serverHost = location.host;
 if (serverHost.startsWith('3000-')) {
@@ -37,32 +43,14 @@ if (serverHost.startsWith('3000-')) {
 }
 const service = new ExtensionRegistryService(`${location.protocol}//${serverHost}`);
 
-async function getServerVersion(): Promise<string> {
-   const abortController = new AbortController();
-   try {
-    const result = await service.getRegistryVersion(abortController);
-    return result.version;
-   } catch (error) {
-    console.error('Could not determine server version');
-    return 'unknown';
-   }
-}
-
 export const App = () => {
     const prefersDarkMode = useMediaQuery('(prefers-color-scheme: dark)');
-    const theme = useMemo(
-        () => createDefaultTheme(prefersDarkMode ? 'dark' : 'light'),
-        [prefersDarkMode],
-    );
-
-    const pageSettings = createPageSettings(prefersDarkMode, service.serverUrl, getServerVersion());
+    const theme = useMemo(() => createDefaultTheme(prefersDarkMode ? 'dark' : 'light'), [prefersDarkMode]);
+    const pageSettings = useMemo(() => createPageSettings(prefersDarkMode, service.serverUrl), [prefersDarkMode]);
     return (
         <HelmetProvider>
             <ThemeProvider theme={theme}>
-                <Main
-                    service={service}
-                    pageSettings={pageSettings}
-                />
+                <Main service={service} pageSettings={pageSettings} />
             </ThemeProvider>
         </HelmetProvider>
     );
@@ -70,6 +58,8 @@ export const App = () => {
 
 const node = document.getElementById('main') as HTMLElement;
 const root = createRoot(node);
-root.render(<BrowserRouter>
-    <App />
-</BrowserRouter>);
+root.render(
+    <BrowserRouter>
+        <App />
+    </BrowserRouter>
+);

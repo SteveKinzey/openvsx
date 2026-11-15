@@ -8,52 +8,51 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import { ChangeEvent, FunctionComponent, useContext, useEffect, useState, useRef } from 'react';
-import { Box, Button, Dialog, DialogTitle, DialogContent, DialogContentText, TextField, DialogActions } from '@mui/material';
+import { ChangeEvent, FunctionComponent, useContext, useState } from 'react';
+import {
+    Box,
+    Button,
+    Dialog,
+    DialogTitle,
+    DialogContent,
+    DialogContentText,
+    TextField,
+    DialogActions
+} from '@mui/material';
 import { ButtonWithProgress } from '../../components/button-with-progress';
-import { Extension, StarRating, isError } from '../../extension-registry-types';
+import { Extension, StarRating } from '../../extension-registry-types';
 import { ExtensionRatingStarSetter } from './extension-rating-star-setter';
 import { MainContext } from '../../context';
+import { usePostReview } from './use-extension-reviews';
 
 const REVIEW_COMMENT_SIZE = 2048;
 
 export const ExtensionReviewDialog: FunctionComponent<ExtensionReviewDialogProps> = props => {
     const [open, setOpen] = useState<boolean>(false);
-    const [posted, setPosted] = useState<boolean>(false);
     const [rating, setRating] = useState<StarRating>(1);
     const [comment, setComment] = useState<string>('');
     const [commentError, setCommentError] = useState<string>();
     const context = useContext(MainContext);
-    const abortController = useRef<AbortController>(new AbortController());
-
-    useEffect(() => {
-        return () => abortController.current.abort();
-    }, []);
+    const { mutate: postReview, isPending: posting } = usePostReview(props.extension);
 
     const handleOpenButton = () => {
         if (context.user) {
             setOpen(true);
-            setPosted(false);
         }
     };
 
     const handleCancel = () => setOpen(false);
 
-    const handlePost = async () => {
-        setPosted(true);
-        try {
-            const result = await context.service.postReview(abortController.current, { rating, comment }, props.reviewPostUrl);
-            if (isError(result)) {
-                throw result;
+    const handlePost = () =>
+        postReview(
+            { review: { rating, comment }, postUrl: props.reviewPostUrl },
+            {
+                onSuccess: () => {
+                    setOpen(false);
+                    setComment('');
+                }
             }
-
-            setOpen(false);
-            setComment('');
-            props.saveCompleted();
-        } catch (err) {
-            context.handleError(err);
-        }
-    };
+        );
 
     const handleCommentChange = (event: ChangeEvent<HTMLTextAreaElement>) => {
         const comment = event.target.value;
@@ -69,52 +68,66 @@ export const ExtensionReviewDialog: FunctionComponent<ExtensionReviewDialogProps
     if (!context.user) {
         return null;
     }
-    return <>
-        {!posted && (<Button variant='contained' color='secondary' onClick={handleOpenButton}>
-            Write a Review
-        </Button>)}
-        <Dialog open={open} onClose={handleCancel}>
-            <DialogTitle>{props.extension.displayName ?? props.extension.name} Review</DialogTitle>
-            <DialogContent>
-                <DialogContentText>
-                    Your review will be posted publicly as {context.user.loginName}
-                </DialogContentText>
-                <Box
-                    component='div'
-                    sx={{
-                        width: { xs: '140%', sm: '100%', md: '100%', lg: '100%', xl: '100%' },
-                        transform: { xs: 'scale(.7) translateX(-23%)', sm: 'none', md: 'none', lg: 'none', xl: 'none' }
-                    }}
-                >
-                    <ExtensionRatingStarSetter handleRatingChange={(rating: number) => setRating(rating as StarRating)} />
-                </Box>
-                <TextField
-                    margin='dense'
-                    label='Your Review...'
-                    fullWidth
-                    multiline
-                    variant='outlined'
-                    rows={4}
-                    error={Boolean(commentError)}
-                    helperText={commentError}
-                    onChange={handleCommentChange} />
-            </DialogContent>
-            <DialogActions sx={{ justifyContent: { xs: 'center', sm: 'end', md: 'end', lg: 'end', xl: 'end' } }}>
-                <Button
-                    onClick={handleCancel}
-                    color='secondary' >
-                    Cancel
+    return (
+        <>
+            {!posting && (
+                <Button variant='contained' color='secondary' onClick={handleOpenButton}>
+                    Write a Review
                 </Button>
-                <ButtonWithProgress autoFocus error={Boolean(commentError)} working={posted} sx={{ ml: 1 }} onClick={handlePost}>
-                    Post Review
-                </ButtonWithProgress>
-            </DialogActions>
-        </Dialog>
-    </>;
+            )}
+            <Dialog open={open} onClose={handleCancel}>
+                <DialogTitle>{props.extension.displayName ?? props.extension.name} Review</DialogTitle>
+                <DialogContent>
+                    <DialogContentText>
+                        Your review will be posted publicly as {context.user.loginName}
+                    </DialogContentText>
+                    <Box
+                        component='div'
+                        sx={{
+                            width: { xs: '140%', sm: '100%', md: '100%', lg: '100%', xl: '100%' },
+                            transform: {
+                                xs: 'scale(.7) translateX(-23%)',
+                                sm: 'none',
+                                md: 'none',
+                                lg: 'none',
+                                xl: 'none'
+                            }
+                        }}>
+                        <ExtensionRatingStarSetter
+                            handleRatingChange={(rating: number) => setRating(rating as StarRating)}
+                        />
+                    </Box>
+                    <TextField
+                        margin='dense'
+                        label='Your Review...'
+                        fullWidth
+                        multiline
+                        variant='outlined'
+                        rows={4}
+                        error={Boolean(commentError)}
+                        helperText={commentError}
+                        onChange={handleCommentChange}
+                    />
+                </DialogContent>
+                <DialogActions sx={{ justifyContent: { xs: 'center', sm: 'end', md: 'end', lg: 'end', xl: 'end' } }}>
+                    <Button onClick={handleCancel} color='secondary'>
+                        Cancel
+                    </Button>
+                    <ButtonWithProgress
+                        autoFocus
+                        error={Boolean(commentError)}
+                        working={posting}
+                        sx={{ ml: 1 }}
+                        onClick={handlePost}>
+                        Post Review
+                    </ButtonWithProgress>
+                </DialogActions>
+            </Dialog>
+        </>
+    );
 };
 
 export interface ExtensionReviewDialogProps {
     extension: Extension;
     reviewPostUrl: string;
-    saveCompleted: () => void;
 }

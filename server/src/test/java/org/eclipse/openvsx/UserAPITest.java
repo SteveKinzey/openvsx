@@ -1,33 +1,65 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2020 TypeFox and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import java.time.Duration;
+import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+import java.util.function.Consumer;
+
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import jakarta.persistence.EntityManager;
+import org.jobrunr.scheduling.JobRequestScheduler;
+import org.jooq.DSLContext;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
+import org.mockito.invocation.InvocationOnMock;
+import org.mockito.stubbing.Answer;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.data.util.Streamable;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
+import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
+import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.client.RestTemplate;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.json.JsonMapper;
+
 import org.eclipse.openvsx.accesstoken.AccessTokenConfig;
 import org.eclipse.openvsx.accesstoken.AccessTokenService;
 import org.eclipse.openvsx.cache.CacheService;
 import org.eclipse.openvsx.cache.LatestExtensionVersionCacheKeyGenerator;
-import org.eclipse.openvsx.eclipse.EclipseService;
-import org.eclipse.openvsx.eclipse.EclipseTokenService;
 import org.eclipse.openvsx.entities.*;
 import org.eclipse.openvsx.json.*;
 import org.eclipse.openvsx.mail.MailService;
 import org.eclipse.openvsx.publish.ExtensionVersionIntegrityService;
 import org.eclipse.openvsx.publish.PublishExtensionVersionHandler;
-import org.eclipse.openvsx.publish.PublishingConfig;
+import org.eclipse.openvsx.publisheragreement.PublisherAgreementService;
 import org.eclipse.openvsx.repositories.RepositoryService;
 import org.eclipse.openvsx.scanning.ExtensionScanPersistenceService;
 import org.eclipse.openvsx.scanning.ExtensionScanService;
+import org.eclipse.openvsx.scanning.NamespaceOwnershipCheckScanner;
+import org.eclipse.openvsx.search.SearchExplainService;
 import org.eclipse.openvsx.search.SearchUtilService;
 import org.eclipse.openvsx.search.SimilarityCheckService;
 import org.eclipse.openvsx.search.SimilarityConfig;
@@ -36,74 +68,87 @@ import org.eclipse.openvsx.security.OAuth2AttributesConfig;
 import org.eclipse.openvsx.security.OAuth2UserServices;
 import org.eclipse.openvsx.security.SecurityConfig;
 import org.eclipse.openvsx.storage.StorageUtilService;
+import org.eclipse.openvsx.trustedpublishing.TrustedPublishingConfig;
+import org.eclipse.openvsx.util.ErrorResultException;
 import org.eclipse.openvsx.util.LogService;
 import org.eclipse.openvsx.util.TargetPlatform;
+import org.eclipse.openvsx.util.TargetPlatformVersion;
+import org.eclipse.openvsx.util.UUIDService;
 import org.eclipse.openvsx.util.VersionService;
-import org.jobrunr.scheduling.JobRequestScheduler;
-import org.junit.jupiter.api.Test;
-import org.mockito.Mockito;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.client.AutoConfigureWebClient;
-import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
-import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.annotation.Bean;
-import org.springframework.context.annotation.Import;
-import org.springframework.data.util.Streamable;
-import org.springframework.http.MediaType;
-import org.springframework.security.oauth2.client.registration.ClientRegistrationRepository;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-import org.springframework.test.web.servlet.MockMvc;
-import org.springframework.transaction.support.TransactionTemplate;
-
-import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.List;
-import java.util.function.Consumer;
+import org.eclipse.openvsx.web.WebUiProperties;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.when;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(UserAPI.class)
-@AutoConfigureWebClient
-@MockitoBean(types = {
-        EclipseService.class, ClientRegistrationRepository.class, StorageUtilService.class, CacheService.class,
-        ExtensionValidator.class, SimpleMeterRegistry.class, SearchUtilService.class, PublishExtensionVersionHandler.class,
-        JobRequestScheduler.class, VersionService.class, ExtensionVersionIntegrityService.class, ExtensionScanService.class,
-        ExtensionScanPersistenceService.class, LogService.class, AccessTokenConfig.class, MailService.class
-})
+@MockitoBean(
+    types = {
+        DSLContext.class,
+        RestTemplate.class,
+        ClientRegistrationRepository.class,
+        StorageUtilService.class,
+        CacheService.class,
+        ExtensionValidator.class,
+        SimpleMeterRegistry.class,
+        SearchUtilService.class,
+        SearchExplainService.class,
+        PublishExtensionVersionHandler.class,
+        JobRequestScheduler.class,
+        VersionService.class,
+        ExtensionVersionIntegrityService.class,
+        ExtensionScanService.class,
+        ExtensionScanPersistenceService.class,
+        LogService.class,
+        MailService.class
+    }
+)
 class UserAPITest {
+
+    @BeforeEach
+    void noTrustedPublishersByDefault() {
+        // the real repository hands back an empty Streamable rather than null; only the trusted
+        // publishing tests care what it actually holds
+        Mockito.when(repositories.findTrustedPublishersByNamespaceAndCreatedBy(any(), any()))
+                .thenReturn(Streamable.empty());
+    }
 
     @MockitoSpyBean
     UserService users;
+
+    @MockitoBean
+    PublisherAgreementService publisherAgreements;
 
     @MockitoSpyBean
     AccessTokenService tokens;
 
     @MockitoBean
     EntityManager entityManager;
-    
+
+    @MockitoBean
+    UUIDService uuidService;
+
     @MockitoBean
     RepositoryService repositories;
 
-    @MockitoBean
-    org.eclipse.openvsx.repositories.ExtensionScanRepository scanRepository;
+    @Autowired
+    StorageUtilService storageUtil;
 
     @Autowired
     MockMvc mockMvc;
+    @Autowired
+    private AccessTokenService accessTokenService;
 
     @Test
     void testLoggedIn() throws Exception {
-        mockUserData();
+        var userData = mockUserData();
         mockMvc.perform(get("/user"))
                 .andExpect(status().isOk())
                 .andExpect(content().json(userJson(u -> {
@@ -111,6 +156,48 @@ class UserAPITest {
                     u.setFullName("Test User");
                     u.setHomepage("http://example.com/test");
                 })));
+
+        // the agreement is added to what the user sees by the service
+        Mockito.verify(publisherAgreements).enrichUserJson(any(), eq(userData));
+    }
+
+    @Test
+    void testLoggedInOmitsAPermissionNoProviderRegisters() throws Exception {
+        var userData = mockUserData();
+        userData.getPermissions().add(Permission.MANAGE_SCANS);
+        userData.getPermissions().add(Permission.of("manage_rate_limits"));
+
+        mockMvc.perform(get("/user"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.permissions.length()").value(1))
+                .andExpect(jsonPath("$.permissions[0]").value("manage_scans"));
+    }
+
+    // What signing does besides answering, such as reactivating extensions, is the service's, tested there.
+    @Test
+    void testSignPublisherAgreement() throws Exception {
+        var userData = mockUserData();
+
+        mockMvc.perform(
+                post("/user/publisher-agreement")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isOk());
+
+        Mockito.verify(publisherAgreements).sign(eq(userData), any());
+    }
+
+    @Test
+    void testSignPublisherAgreementRefusalIsReported() throws Exception {
+        var userData = mockUserData();
+        Mockito.doThrow(new ErrorResultException("nope", HttpStatus.BAD_REQUEST))
+                .when(publisherAgreements).sign(eq(userData), any());
+
+        mockMvc.perform(
+                post("/user/publisher-agreement")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
@@ -125,8 +212,9 @@ class UserAPITest {
     @Test
     void testAccessTokens() throws Exception {
         mockAccessTokens();
-        mockMvc.perform(get("/user/tokens")
-                .with(user("test_user")))
+        mockMvc.perform(
+                get("/user/tokens")
+                        .with(user("test_user")))
                 .andExpect(status().isOk())
                 .andExpect(content().json(accessTokensJson(a -> {
                     var t1 = new AccessTokenJson();
@@ -137,23 +225,37 @@ class UserAPITest {
                     t3.setDescription("This is token 3");
                     t3.setCreatedTimestamp("2000-01-01T10:00Z");
                     a.add(t3);
+                    var t4 = new AccessTokenJson();
+                    t4.setDescription("This is token 4");
+                    t4.setCreatedTimestamp("2000-01-01T10:00Z");
+                    t4.setPublishingOnly(true);
+                    t4.setScopeNamespace("foo");
+                    a.add(t4);
                 })));
+    }
+
+    @Test
+    void testCsrfTokenNotLoggedIn() throws Exception {
+        // not a handler's own answer: the security filter chain refuses it
+        mockMvc.perform(get("/user/csrf"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
     void testAccessTokensNotLoggedIn() throws Exception {
         mockAccessTokens();
         mockMvc.perform(get("/user/tokens"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
     void testCreateAccessToken() throws Exception {
         mockUserData();
-        Mockito.doReturn("foobar").when(tokens).generateTokenValue();
-        mockMvc.perform(post("/user/token/create?description={description}", "This is my token")
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        Mockito.doReturn("foobar").when(accessTokenService).generateTokenValue(any());
+        mockMvc.perform(
+                post("/user/token/create?description={description}", "This is my token")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isCreated())
                 .andExpect(content().json(accessTokenJson(t -> {
                     t.setValue("foobar");
@@ -162,10 +264,133 @@ class UserAPITest {
     }
 
     @Test
-    void testCreateAccessTokenNotLoggedIn() throws Exception {
-        mockMvc.perform(post("/user/token/create?description={description}", "This is my token")
-                .with(csrf().asHeader()))
+    void testCreateAccessTokenScopedToUnknownNamespace() throws Exception {
+        mockUserData();
+        mockMvc.perform(
+                post("/user/token/create?namespace={namespace}", "unknown")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void testCreateAccessTokenScopedToExtensionNeedsNamespace() throws Exception {
+        mockUserData();
+        mockMvc.perform(
+                post("/user/token/create?extension={extension}", "bar")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    void testCreateAccessTokenScopedToNamespaceWithoutPublishPermission() throws Exception {
+        mockUserData();
+        var namespace = new Namespace();
+        namespace.setName("foo");
+        Mockito.when(repositories.findNamespace("foo")).thenReturn(namespace);
+        Mockito.doReturn(false).when(users).hasPublishPermission(any(), any());
+        mockMvc.perform(
+                post("/user/token/create?namespace={namespace}", "foo")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isForbidden());
+    }
+
+    @Test
+    void testCreateAccessTokenScopedToNamespace() throws Exception {
+        mockUserData();
+        Mockito.doReturn("foobar").when(accessTokenService).generateTokenValue(any());
+        var namespace = new Namespace();
+        namespace.setName("foo");
+        Mockito.when(repositories.findNamespace("foo")).thenReturn(namespace);
+        Mockito.doReturn(true).when(users).hasPublishPermission(any(), any());
+        mockMvc.perform(
+                post("/user/token/create?description={description}&namespace={namespace}", "scoped", "foo")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isCreated())
+                .andExpect(content().json(accessTokenJson(t -> {
+                    t.setValue("foobar");
+                    t.setDescription("scoped");
+                    t.setScopeNamespace("foo");
+                })))
+                .andExpect(jsonPath("$.scopeExtension").doesNotExist());
+    }
+
+    @Test
+    void testCreateAccessTokenScopedToExtension() throws Exception {
+        mockUserData();
+        Mockito.doReturn("foobar").when(accessTokenService).generateTokenValue(any());
+        var namespace = new Namespace();
+        namespace.setName("foo");
+        var extension = new Extension();
+        extension.setName("bar");
+        extension.setNamespace(namespace);
+        Mockito.when(repositories.findNamespace("foo")).thenReturn(namespace);
+        Mockito.when(repositories.findExtension("bar", namespace)).thenReturn(extension);
+        Mockito.doReturn(true).when(users).hasPublishPermission(any(), any());
+        mockMvc.perform(
+                post("/user/token/create?namespace={namespace}&extension={extension}", "foo", "bar")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isCreated())
+                .andExpect(content().json(accessTokenJson(t -> {
+                    t.setScopeNamespace("foo");
+                    t.setScopeExtension("bar");
+                })));
+    }
+
+    @Test
+    void testCreateAccessTokenScopedToUnknownExtension() throws Exception {
+        mockUserData();
+        var namespace = new Namespace();
+        namespace.setName("foo");
+        Mockito.when(repositories.findNamespace("foo")).thenReturn(namespace);
+        Mockito.doReturn(true).when(users).hasPublishPermission(any(), any());
+        mockMvc.perform(
+                post("/user/token/create?namespace={namespace}&extension={extension}", "foo", "unknown")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    void testCreatePublishingOnlyAccessToken() throws Exception {
+        mockUserData();
+        Mockito.doReturn("foobar").when(accessTokenService).generateTokenValue(any());
+        mockMvc.perform(
+                post("/user/token/create?description={description}&publishingOnly=true", "ci")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isCreated())
+                .andExpect(content().json(accessTokenJson(t -> {
+                    t.setValue("foobar");
+                    t.setDescription("ci");
+                    t.setPublishingOnly(true);
+                })));
+        Mockito.verify(accessTokenService).generateTokenValue(PersonalAccessTokenType.LLP);
+    }
+
+    @Test
+    void testCreateAccessTokenIsNotPublishingOnlyByDefault() throws Exception {
+        mockUserData();
+        Mockito.doReturn("foobar").when(accessTokenService).generateTokenValue(any());
+        mockMvc.perform(
+                post("/user/token/create?description={description}", "ci")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.publishingOnly").value(false));
+        Mockito.verify(accessTokenService).generateTokenValue(PersonalAccessTokenType.LLT);
+    }
+
+    @Test
+    void testCreateAccessTokenNotLoggedIn() throws Exception {
+        mockMvc.perform(
+                post("/user/token/create?description={description}", "This is my token")
+                        .with(csrf().asHeader()))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -175,23 +400,24 @@ class UserAPITest {
         token.setId(100);
         token.setUser(userData);
         token.setActive(true);
-        Mockito.when(repositories.findAccessToken(100))
+        token.setType(PersonalAccessTokenType.LLT);
+        Mockito.when(repositories.findPersonalAccessToken(100))
                 .thenReturn(token);
-        Mockito.when(entityManager.merge(userData))
-                .thenReturn(userData);
 
-        mockMvc.perform(post("/user/token/delete/{id}", 100)
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        mockMvc.perform(
+                post("/user/token/delete/{id}", 100)
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isOk())
                 .andExpect(content().json(successJson("Deactivated access token for user test_user.")));
     }
 
     @Test
     void testDeleteAccessTokenNotLoggedIn() throws Exception {
-        mockMvc.perform(post("/user/token/delete/{id}", 100)
-                .with(csrf().asHeader()))
-                .andExpect(status().isForbidden());
+        mockMvc.perform(
+                post("/user/token/delete/{id}", 100)
+                        .with(csrf().asHeader()))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -201,12 +427,14 @@ class UserAPITest {
         token.setId(100);
         token.setUser(userData);
         token.setActive(false);
-        Mockito.when(repositories.findAccessToken(100))
+        token.setType(PersonalAccessTokenType.LLT);
+        Mockito.when(repositories.findPersonalAccessToken(100))
                 .thenReturn(token);
 
-        mockMvc.perform(post("/user/token/delete/{id}", 100)
-                .with(user("test_user"))
-                .with(csrf()))
+        mockMvc.perform(
+                post("/user/token/delete/{id}", 100)
+                        .with(user("test_user"))
+                        .with(csrf()))
                 .andExpect(status().isNotFound())
                 .andExpect(content().json(errorJson("Token does not exist.")));
     }
@@ -215,17 +443,20 @@ class UserAPITest {
     void testDeleteAccessTokenWrongUser() throws Exception {
         mockUserData();
         var userData = new UserData();
+        userData.setId(2);
         userData.setLoginName("wrong_user");
         var token = new PersonalAccessToken();
         token.setId(100);
         token.setUser(userData);
         token.setActive(true);
-        Mockito.when(repositories.findAccessToken(100))
+        token.setType(PersonalAccessTokenType.LLT);
+        Mockito.when(repositories.findPersonalAccessToken(100))
                 .thenReturn(token);
 
-        mockMvc.perform(post("/user/token/delete/{id}", 100)
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        mockMvc.perform(
+                post("/user/token/delete/{id}", 100)
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isNotFound())
                 .andExpect(content().json(errorJson("Token does not exist.")));
     }
@@ -233,8 +464,9 @@ class UserAPITest {
     @Test
     void testOwnNamespaces() throws Exception {
         mockOwnMemberships();
-        mockMvc.perform(get("/user/namespaces")
-                .with(user("test_user")))
+        mockMvc.perform(
+                get("/user/namespaces")
+                        .with(user("test_user")))
                 .andExpect(status().isOk())
                 .andExpect(content().json(namespacesJson(a -> {
                     var ns1 = new NamespaceJson();
@@ -250,14 +482,22 @@ class UserAPITest {
     void testOwnNamespacesNotLoggedIn() throws Exception {
         mockOwnMemberships();
         mockMvc.perform(get("/user/namespaces"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
     void testOwnExtension() throws Exception {
         var userData = mockUserData();
-        mockExtension(userData, 2, 0, 0);
-        mockMvc.perform(get("/user/extensions")
+        var versions = mockExtension(userData, 2, 0, 0);
+        var namespace = versions.getLast().getExtension().getNamespace();
+        // The user is still a member of the namespace, so their published extension is listed.
+        var membership = new NamespaceMembership();
+        membership.setNamespace(namespace);
+        membership.setUser(userData);
+        membership.setRole(NamespaceMembership.ROLE_CONTRIBUTOR);
+        Mockito.when(repositories.findMemberships(userData)).thenReturn(Streamable.of(membership));
+        mockMvc.perform(
+                get("/user/extensions")
                         .with(user("test_user")))
                 .andExpect(status().isOk())
                 .andExpect(content().json(extensionJson(a -> {
@@ -269,18 +509,292 @@ class UserAPITest {
     }
 
     @Test
+    void testOwnExtensionExcludesNonMemberNamespace() throws Exception {
+        var userData = mockUserData();
+        mockExtension(userData, 2, 0, 0);
+        // The user published the extension but is no longer a member of its namespace: it must not
+        // be listed. findMemberships returns nothing, so the published extension is filtered out.
+        Mockito.when(repositories.findMemberships(userData)).thenReturn(Streamable.empty());
+        mockMvc.perform(
+                get("/user/extensions")
+                        .with(user("test_user")))
+                .andExpect(status().isOk())
+                .andExpect(content().json("[]"));
+    }
+
+    @Test
     void testOwnExtensionNotLoggedIn() throws Exception {
         var userData = mockUserData();
         mockExtension(userData, 1, 0, 0);
         mockMvc.perform(get("/user/extensions"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void testOwnExtensionsVerifiedAndNamespaceOwnershipConflict() throws Exception {
+        // An extension kept inactive because its namespace conflicts with one already claimed in a
+        // referenced external gallery: 'verified' is false (no owner yet) and
+        // 'namespaceOwnershipConflict' reports the specific reason, so the webui can point the user at
+        // verifying/claiming the namespace instead of a generic "under review" message.
+        var userData = mockUserData();
+        var versions = mockExtension(userData, 1, 0, 0);
+        var latest = versions.getLast();
+        var extension = latest.getExtension();
+        extension.setActive(false);
+        var namespace = extension.getNamespace();
+
+        latest.setPublishedBy(userData);
+
+        var membership = new NamespaceMembership();
+        membership.setNamespace(namespace);
+        membership.setUser(userData);
+        membership.setRole(NamespaceMembership.ROLE_CONTRIBUTOR);
+        Mockito.when(repositories.findMemberships(userData)).thenReturn(Streamable.of(membership));
+        Mockito.when(repositories.isVerifiedPublisher(latest)).thenReturn(false);
+
+        var scan = new ExtensionScan();
+        scan.setStatus(ScanStatus.QUARANTINED);
+        Mockito.when(repositories.findLatestExtensionScan(latest)).thenReturn(scan);
+        Mockito.when(repositories.findExtensionThreats(scan, NamespaceOwnershipCheckScanner.TYPE))
+                .thenReturn(
+                        Streamable.of(
+                                ExtensionThreat.create(
+                                        null,
+                                        null,
+                                        null,
+                                        NamespaceOwnershipCheckScanner.TYPE,
+                                        NamespaceOwnershipCheckScanner.TYPE + "-conflict",
+                                        "Namespace 'foobar' exists in the referenced gallery, but is not verified.",
+                                        "high")));
+
+        mockMvc.perform(
+                get("/user/extensions")
+                        .with(user("test_user")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].verified").value(false))
+                .andExpect(jsonPath("$[0].namespaceOwnershipConflict").value(true));
+    }
+
+    @Test
+    void testGetOwnExtensionAsNamespaceOwner() throws Exception {
+        var userData = mockUserData();
+        var versions = mockExtension(userData, 2, 0, 0);
+        var latest = versions.getLast();
+        latest.setId(42L);
+        var extension = latest.getExtension();
+        // The caller owns the namespace: the unscoped lookup is used and every version is deletable.
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.findLatestVersion(eq("foobar"), eq("baz"), any(), eq(false), eq(false)))
+                .thenReturn(latest);
+        Mockito.when(repositories.findTargetPlatformsGroupedByVersion(extension))
+                .thenReturn(
+                        List.of(
+                                new VersionTargetPlatformsJson(
+                                        "2.0.0",
+                                        List.of(
+                                                new TargetPlatformActiveJson(
+                                                        TargetPlatform.NAME_UNIVERSAL,
+                                                        true,
+                                                        false))),
+                                new VersionTargetPlatformsJson(
+                                        "1.0.0",
+                                        List.of(
+                                                new TargetPlatformActiveJson(
+                                                        TargetPlatform.NAME_UNIVERSAL,
+                                                        true,
+                                                        false)))));
+        Mockito.when(storageUtil.getFiles(Mockito.anyCollection(), Mockito.any(String[].class)))
+                .thenReturn(java.util.Map.of(42L, java.util.List.of()));
+        mockMvc.perform(
+                get("/user/extension/{namespace}/{extension}", "foobar", "baz")
+                        .with(user("test_user")))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"name\":\"baz\",\"namespace\":\"foobar\"}"))
+                .andExpect(jsonPath("$.allTargetPlatformVersions[0].canDelete").value(true))
+                .andExpect(jsonPath("$.allTargetPlatformVersions[1].canDelete").value(true));
+    }
+
+    @Test
+    void testGetOwnExtensionShowsTheServedLatestVersionOverARemovedHigherOne() throws Exception {
+        var userData = mockUserData();
+        var versions = mockExtension(userData, 2, 0, 0);
+        var served = versions.getFirst();
+        var removed = versions.getLast();
+        served.setId(41L);
+        removed.setId(42L);
+        removed.setActive(false);
+        removed.setRemoved(true);
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.findLatestVersion(eq("foobar"), eq("baz"), any(), eq(false), eq(true)))
+                .thenReturn(served);
+        Mockito.when(repositories.findLatestVersion(eq("foobar"), eq("baz"), any(), eq(false), eq(false)))
+                .thenReturn(removed);
+        Mockito.when(storageUtil.getFiles(Mockito.anyCollection(), Mockito.any(String[].class)))
+                .thenReturn(java.util.Map.of(41L, java.util.List.of()));
+        mockMvc.perform(
+                get("/user/extension/{namespace}/{extension}", "foobar", "baz")
+                        .with(user("test_user")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.version").value("1.0.0"));
+    }
+
+    @Test
+    void testGetOwnExtensionAsNamespaceMember() throws Exception {
+        var userData = mockUserData();
+        var versions = mockExtension(userData, 2, 0, 0);
+        var latest = versions.getLast();
+        latest.setId(42L);
+        var extension = latest.getExtension();
+        // The caller is a namespace member but not an owner: the unscoped lookup lets them see every
+        // version, but only the versions they published themselves are marked deletable.
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.findLatestVersion(eq("foobar"), eq("baz"), any(), eq(false), eq(false)))
+                .thenReturn(latest);
+        Mockito.when(repositories.findTargetPlatformsGroupedByVersion(extension))
+                .thenReturn(
+                        List.of(
+                                new VersionTargetPlatformsJson(
+                                        "2.0.0",
+                                        List.of(
+                                                new TargetPlatformActiveJson(
+                                                        TargetPlatform.NAME_UNIVERSAL,
+                                                        true,
+                                                        false))),
+                                new VersionTargetPlatformsJson(
+                                        "1.0.0",
+                                        List.of(
+                                                new TargetPlatformActiveJson(
+                                                        TargetPlatform.NAME_UNIVERSAL,
+                                                        true,
+                                                        false)))));
+        // Only version 1.0.0 was published by this user.
+        Mockito.when(repositories.findTargetPlatformsGroupedByVersion(extension, userData))
+                .thenReturn(
+                        List.of(
+                                new VersionTargetPlatformsJson(
+                                        "1.0.0",
+                                        List.of(
+                                                new TargetPlatformActiveJson(
+                                                        TargetPlatform.NAME_UNIVERSAL,
+                                                        true,
+                                                        false)))));
+        Mockito.when(storageUtil.getFiles(Mockito.anyCollection(), Mockito.any(String[].class)))
+                .thenReturn(java.util.Map.of(42L, java.util.List.of()));
+        mockMvc.perform(
+                get("/user/extension/{namespace}/{extension}", "foobar", "baz")
+                        .with(user("test_user")))
+                .andExpect(status().isOk())
+                .andExpect(content().json("{\"name\":\"baz\",\"namespace\":\"foobar\"}"))
+                .andExpect(jsonPath("$.allTargetPlatformVersions[0].version").value("2.0.0"))
+                .andExpect(jsonPath("$.allTargetPlatformVersions[0].canDelete").value(false))
+                .andExpect(jsonPath("$.allTargetPlatformVersions[1].version").value("1.0.0"))
+                .andExpect(jsonPath("$.allTargetPlatformVersions[1].canDelete").value(true));
+    }
+
+    @Test
+    void testGetOwnExtensionNamespaceOwnershipConflict() throws Exception {
+        var userData = mockUserData();
+        var versions = mockExtension(userData, 2, 0, 0);
+        var latest = versions.getLast();
+        latest.setId(42L);
+        var extension = latest.getExtension();
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.findLatestVersion(eq("foobar"), eq("baz"), any(), eq(false), eq(false)))
+                .thenReturn(latest);
+        Mockito.when(repositories.findTargetPlatformsGroupedByVersion(extension)).thenReturn(List.of());
+        Mockito.when(storageUtil.getFiles(Mockito.anyCollection(), Mockito.any(String[].class)))
+                .thenReturn(java.util.Map.of(42L, java.util.List.of()));
+
+        var scan = new ExtensionScan();
+        scan.setStatus(ScanStatus.QUARANTINED);
+        Mockito.when(repositories.findLatestExtensionScan(latest)).thenReturn(scan);
+        Mockito.when(repositories.findExtensionThreats(scan, NamespaceOwnershipCheckScanner.TYPE))
+                .thenReturn(
+                        Streamable.of(
+                                ExtensionThreat.create(
+                                        null,
+                                        null,
+                                        null,
+                                        NamespaceOwnershipCheckScanner.TYPE,
+                                        NamespaceOwnershipCheckScanner.TYPE + "-conflict",
+                                        "Namespace 'foobar' exists in the referenced gallery, but is not verified.",
+                                        "high")));
+
+        mockMvc.perform(
+                get("/user/extension/{namespace}/{extension}", "foobar", "baz")
+                        .with(user("test_user")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.namespaceOwnershipConflict").value(true));
+    }
+
+    // The scan's threat stays recorded after the namespace gains an owner, which resolves the conflict.
+    @Test
+    void testGetOwnExtensionNamespaceOwnershipConflictResolvedByOwner() throws Exception {
+        var userData = mockUserData();
+        var versions = mockExtension(userData, 2, 0, 0);
+        var latest = versions.getLast();
+        latest.setId(42L);
+        var extension = latest.getExtension();
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.findLatestVersion(eq("foobar"), eq("baz"), any(), eq(false), eq(false)))
+                .thenReturn(latest);
+        Mockito.when(repositories.findTargetPlatformsGroupedByVersion(extension)).thenReturn(List.of());
+        Mockito.when(storageUtil.getFiles(Mockito.anyCollection(), Mockito.any(String[].class)))
+                .thenReturn(java.util.Map.of(42L, java.util.List.of()));
+
+        var scan = new ExtensionScan();
+        scan.setStatus(ScanStatus.QUARANTINED);
+        Mockito.when(repositories.findLatestExtensionScan(latest)).thenReturn(scan);
+        Mockito.when(repositories.findExtensionThreats(scan, NamespaceOwnershipCheckScanner.TYPE))
+                .thenReturn(
+                        Streamable.of(
+                                ExtensionThreat.create(
+                                        null,
+                                        null,
+                                        null,
+                                        NamespaceOwnershipCheckScanner.TYPE,
+                                        NamespaceOwnershipCheckScanner.TYPE + "-conflict",
+                                        "Namespace 'foobar' exists in the referenced gallery, but is not verified.",
+                                        "high")));
+
+        Mockito.when(repositories.isVerified(extension.getNamespace())).thenReturn(true);
+
+        mockMvc.perform(
+                get("/user/extension/{namespace}/{extension}", "foobar", "baz")
+                        .with(user("test_user")))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.namespaceOwnershipConflict").value(false));
+    }
+
+    @Test
+    void testGetOwnExtensionNotMember() throws Exception {
+        var userData = mockUserData();
+        mockExtension(userData, 2, 0, 0);
+        // Not a namespace member: no access at all, even to versions the user may have published
+        // while they were still a member => 404 without ever looking up any version.
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                get("/user/extension/{namespace}/{extension}", "foobar", "baz")
+                        .with(user("test_user")))
+                .andExpect(status().isNotFound());
+        Mockito.verify(repositories, Mockito.never())
+                .findLatestVersion(eq("foobar"), eq("baz"), any(), eq(false), eq(false));
+    }
+
+    @Test
+    void testGetOwnExtensionNotLoggedIn() throws Exception {
+        mockMvc.perform(get("/user/extension/{namespace}/{extension}", "foobar", "baz"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
     void testNamespaceMembers() throws Exception {
         mockNamespaceMemberships(NamespaceMembership.ROLE_OWNER);
-        mockMvc.perform(get("/user/namespace/{name}/members", "foobar")
-                .with(user("test_user")))
+        mockMvc.perform(
+                get("/user/namespace/{name}/members", "foobar")
+                        .with(user("test_user")))
                 .andExpect(status().isOk())
                 .andExpect(content().json(membershipsJson(a -> {
                     var u1 = new UserJson();
@@ -298,14 +812,15 @@ class UserAPITest {
     void testNamespaceMembersNotLoggedIn() throws Exception {
         mockNamespaceMemberships(NamespaceMembership.ROLE_OWNER);
         mockMvc.perform(get("/user/namespace/{name}/members", "foobar"))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
     void testNamespaceMembersNotOwner() throws Exception {
         mockNamespaceMemberships(NamespaceMembership.ROLE_CONTRIBUTOR);
-        mockMvc.perform(get("/user/namespace/{name}/members", "foobar")
-                .with(user("test_user")))
+        mockMvc.perform(
+                get("/user/namespace/{name}/members", "foobar")
+                        .with(user("test_user")))
                 .andExpect(status().isForbidden());
     }
 
@@ -331,20 +846,28 @@ class UserAPITest {
         Mockito.when(repositories.findMembership(userData2, namespace))
                 .thenReturn(null);
 
-        mockMvc.perform(post("/user/namespace/{namespace}/role?user={user}&role={role}", "foobar",
-                    "other_user", "contributor")
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        mockMvc.perform(
+                post(
+                        "/user/namespace/{namespace}/role?user={user}&role={role}",
+                        "foobar",
+                        "other_user",
+                        "contributor")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isOk())
                 .andExpect(content().json(successJson("Added other_user as contributor of foobar.")));
     }
 
     @Test
     void testAddNamespaceMemberNotLoggedIn() throws Exception {
-        mockMvc.perform(post("/user/namespace/{namespace}/role?user={user}&role={role}", "foobar",
-                    "other_user", "contributor")
-                .with(csrf().asHeader()))
-                .andExpect(status().isForbidden());
+        mockMvc.perform(
+                post(
+                        "/user/namespace/{namespace}/role?user={user}&role={role}",
+                        "foobar",
+                        "other_user",
+                        "contributor")
+                        .with(csrf().asHeader()))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -373,10 +896,14 @@ class UserAPITest {
         Mockito.when(repositories.findMembership(userData2, namespace))
                 .thenReturn(membership2);
 
-        mockMvc.perform(post("/user/namespace/{namespace}/role?user={user}&role={role}", "foobar",
-                    "other_user", "contributor")
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        mockMvc.perform(
+                post(
+                        "/user/namespace/{namespace}/role?user={user}&role={role}",
+                        "foobar",
+                        "other_user",
+                        "contributor")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isOk())
                 .andExpect(content().json(successJson("Changed role of other_user in foobar to contributor.")));
     }
@@ -407,10 +934,14 @@ class UserAPITest {
         Mockito.when(repositories.findMembership(userData2, namespace))
                 .thenReturn(membership2);
 
-        mockMvc.perform(post("/user/namespace/{namespace}/role?user={user}&role={role}", "foobar",
-                    "other_user", "remove")
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        mockMvc.perform(
+                post(
+                        "/user/namespace/{namespace}/role?user={user}&role={role}",
+                        "foobar",
+                        "other_user",
+                        "remove")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isOk())
                 .andExpect(content().json(successJson("Removed other_user from namespace foobar.")));
     }
@@ -429,10 +960,14 @@ class UserAPITest {
         Mockito.when(repositories.findMembership(userData1, namespace))
                 .thenReturn(membership);
 
-        mockMvc.perform(post("/user/namespace/{namespace}/role?user={user}&role={role}", "foobar",
-                    "other_user", "contributor")
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        mockMvc.perform(
+                post(
+                        "/user/namespace/{namespace}/role?user={user}&role={role}",
+                        "foobar",
+                        "other_user",
+                        "contributor")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().json(errorJson("You must be an owner of this namespace.")));
     }
@@ -463,20 +998,25 @@ class UserAPITest {
         Mockito.when(repositories.findMembership(userData2, namespace))
                 .thenReturn(membership2);
 
-        mockMvc.perform(post("/user/namespace/{namespace}/role?user={user}&role={role}", "foobar",
-                    "other_user", "contributor")
-                .with(user("test_user"))
-                .with(csrf().asHeader()))
+        mockMvc.perform(
+                post(
+                        "/user/namespace/{namespace}/role?user={user}&role={role}",
+                        "foobar",
+                        "other_user",
+                        "contributor")
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
                 .andExpect(status().isBadRequest())
                 .andExpect(content().json(errorJson("User other_user already has the role contributor.")));
     }
 
     @Test
     void testDeleteExtensionNotLoggedIn() throws Exception {
-        mockExtension(null,2, 0, 0);
-        mockMvc.perform(post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+        mockExtension(null, 2, 0, 0);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
                         .with(csrf().asHeader()))
-                .andExpect(status().isForbidden());
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
@@ -490,7 +1030,12 @@ class UserAPITest {
         Mockito.doReturn(otherUser).when(users).findLoggedInUser();
 
         mockExtension(userData, 2, 0, 0);
-        mockMvc.perform(post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+        // A namespace member, but not the publisher of the targeted version: the version lookup is
+        // scoped to the caller, so it is not found and the delete fails with 404.
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
                         .content("[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"}]")
                         .contentType(MediaType.APPLICATION_JSON)
                         .with(user("other_user"))
@@ -499,24 +1044,72 @@ class UserAPITest {
     }
 
     @Test
+    void testDeleteExtensionNotMember() throws Exception {
+        var userData = mockUserData();
+        mockExtension(userData, 2, 0, 0);
+        // Neither owner nor member of the namespace: rejected before the extension is touched.
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+                        .content("[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"}]")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void testDeleteExtension() throws Exception {
         var userData = mockUserData();
-        mockExtension(userData,2, 0, 0);
-        mockMvc.perform(post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
-                        .content("[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"},{\"targetPlatform\":\"universal\",\"version\":\"2.0.0\"}]")
+        mockExtension(userData, 2, 0, 0);
+        // A member deletes all versions they published by naming them explicitly; each is soft-deleted.
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+                        .content(
+                                "[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"},{\"targetPlatform\":\"universal\",\"version\":\"2.0.0\"}]")
                         .contentType(MediaType.APPLICATION_JSON)
                         .with(user("test_user"))
                         .with(csrf().asHeader()))
                 .andExpect(status().isOk())
-                .andExpect(content().json(successJson("Deleted foobar.baz")));
+                // The web UI reports any error in the body as a failed delete, so a delete where every
+                // version succeeded must not carry one at all.
+                .andExpect(jsonPath("$.error").doesNotExist())
+                .andExpect(content().json(successJson("Deleted foobar.baz 1.0.0\nDeleted foobar.baz 2.0.0")));
+    }
+
+    @Test
+    void testDeleteExtensionEmptyTargetsIsNoOp() throws Exception {
+        var userData = mockUserData();
+        mockExtension(userData, 2, 0, 0);
+        // With the whole-extension shortcut removed, an empty target list deletes nothing.
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+                        .content("[]")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .with(user("test_user"))
+                        .with(csrf().asHeader()))
+                .andExpect(status().isOk())
+                // Nothing was deleted, so the result reports neither a success nor an error.
+                .andExpect(jsonPath("$.success").doesNotExist())
+                .andExpect(jsonPath("$.error").doesNotExist());
     }
 
     @Test
     void testDeleteExtensionVersion() throws Exception {
         var userData = mockUserData();
-        mockExtension(userData,3, 0, 0);
-        mockMvc.perform(post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
-                        .content("[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"},{\"targetPlatform\":\"universal\",\"version\":\"2.0.0\"}]")
+        mockExtension(userData, 3, 0, 0);
+        // Non-owner member may delete versions they published themselves.
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+                        .content(
+                                "[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"},{\"targetPlatform\":\"universal\",\"version\":\"2.0.0\"}]")
                         .contentType(MediaType.APPLICATION_JSON)
                         .with(user("test_user"))
                         .with(csrf().asHeader()))
@@ -527,46 +1120,47 @@ class UserAPITest {
     @Test
     void testDeleteLastExtensionVersion() throws Exception {
         var userData = mockUserData();
-        mockExtension(userData,1, 0, 0);
-        mockMvc.perform(post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+        mockExtension(userData, 1, 0, 0);
+        // Non-owner member deleting the last version they published: soft-deleted per version
+        // (the extension record itself survives, deactivated).
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
                         .content("[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"}]")
                         .contentType(MediaType.APPLICATION_JSON)
                         .with(user("test_user"))
                         .with(csrf().asHeader()))
                 .andExpect(status().isOk())
-                .andExpect(content().json(successJson("Deleted foobar.baz")));
-    }
-
-    @Test
-    void testDeleteBundledExtension() throws Exception {
-        var userData = mockUserData();
-        mockExtension(userData,2, 1, 0);
-        mockMvc.perform(post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
-                        .content("[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"},{\"targetPlatform\":\"universal\",\"version\":\"2.0.0\"}]")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .with(user("test_user"))
-                        .with(csrf().asHeader()))
-                .andExpect(status().isBadRequest())
-                .andExpect(content().json(errorJson("Extension foobar.baz is bundled by the following extension packs: foobar.bundle-1.0.0")));
+                .andExpect(content().json(successJson("Deleted foobar.baz 1.0.0")));
     }
 
     @Test
     void testDeleteDependingExtension() throws Exception {
         var userData = mockUserData();
-        mockExtension(userData,2, 0, 1);
-        mockMvc.perform(post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
-                        .content("[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"},{\"targetPlatform\":\"universal\",\"version\":\"2.0.0\"}]")
+        mockExtension(userData, 2, 0, 1);
+        // Deleting all active versions of a depended-on extension triggers the dependency check.
+        Mockito.when(repositories.hasMembership(any(UserData.class), any(Namespace.class))).thenReturn(true);
+        Mockito.when(repositories.isNamespaceOwner(any(UserData.class), any(Namespace.class))).thenReturn(false);
+        mockMvc.perform(
+                post("/user/extension/{namespace}/{extension}/delete", "foobar", "baz")
+                        .content(
+                                "[{\"targetPlatform\":\"universal\",\"version\":\"1.0.0\"},{\"targetPlatform\":\"universal\",\"version\":\"2.0.0\"}]")
                         .contentType(MediaType.APPLICATION_JSON)
                         .with(user("test_user"))
                         .with(csrf().asHeader()))
                 .andExpect(status().isBadRequest())
-                .andExpect(content().json(errorJson("The following extensions have a dependency on foobar.baz: foobar.dependant-1.0.0")));
+                .andExpect(
+                        content().json(
+                                errorJson(
+                                        "The following extensions have a dependency on foobar.baz: foobar.dependant-1.0.0")));
     }
 
     //---------- UTILITY ----------//
 
     private UserData mockUserData() {
         var userData = new UserData();
+        userData.setId(1);
         userData.setLoginName("test_user");
         userData.setFullName("Test User");
         userData.setProviderUrl("http://example.com/test");
@@ -574,10 +1168,10 @@ class UserAPITest {
         return userData;
     }
 
-    private String userJson(Consumer<UserJson> content) throws JsonProcessingException {
+    private String userJson(Consumer<UserJson> content) throws JacksonException {
         var json = new UserJson();
         content.accept(json);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
     private void mockAccessTokens() {
@@ -588,32 +1182,45 @@ class UserAPITest {
         token1.setDescription("This is token 1");
         token1.setCreatedTimestamp(LocalDateTime.parse("2000-01-01T10:00"));
         token1.setActive(true);
+        token1.setType(PersonalAccessTokenType.LLT);
         var token2 = new PersonalAccessToken();
         token2.setUser(userData);
         token2.setValue("token2");
         token2.setDescription("This is token 2");
         token2.setCreatedTimestamp(LocalDateTime.parse("2000-01-01T10:00"));
         token2.setActive(false);
+        token2.setType(PersonalAccessTokenType.LLT);
         var token3 = new PersonalAccessToken();
         token3.setUser(userData);
         token3.setValue("token3");
         token3.setDescription("This is token 3");
         token3.setCreatedTimestamp(LocalDateTime.parse("2000-01-01T10:00"));
         token3.setActive(true);
-        Mockito.when(repositories.findActiveAccessTokens(userData))
-                .thenReturn(Streamable.of(token1, token3));
+        token3.setType(PersonalAccessTokenType.LLT);
+        var scopeNamespace = new Namespace();
+        scopeNamespace.setName("foo");
+        var token4 = new PersonalAccessToken();
+        token4.setUser(userData);
+        token4.setValue("token4");
+        token4.setDescription("This is token 4");
+        token4.setCreatedTimestamp(LocalDateTime.parse("2000-01-01T10:00"));
+        token4.setActive(true);
+        token4.setType(PersonalAccessTokenType.LLP);
+        token4.setScopeNamespace(scopeNamespace);
+        Mockito.when(repositories.findActivePersonalAccessTokensAndType(userData, PersonalAccessTokenType.LONG_LIVED))
+                .thenReturn(Streamable.of(token1, token3, token4));
     }
 
-    private String accessTokenJson(Consumer<AccessTokenJson> content) throws JsonProcessingException {
+    private String accessTokenJson(Consumer<AccessTokenJson> content) throws JacksonException {
         var json = new AccessTokenJson();
         content.accept(json);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
-    private String accessTokensJson(Consumer<List<AccessTokenJson>> content) throws JsonProcessingException {
+    private String accessTokensJson(Consumer<List<AccessTokenJson>> content) throws JacksonException {
         var json = new ArrayList<AccessTokenJson>();
         content.accept(json);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
     private void mockOwnMemberships() {
@@ -638,16 +1245,16 @@ class UserAPITest {
                 .thenReturn(Streamable.of(membership1, membership2));
     }
 
-    private String namespacesJson(Consumer<List<NamespaceJson>> content) throws JsonProcessingException {
+    private String namespacesJson(Consumer<List<NamespaceJson>> content) throws JacksonException {
         var json = new ArrayList<NamespaceJson>();
         content.accept(json);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
-    private String extensionJson(Consumer<List<ExtensionJson>> content) throws JsonProcessingException {
+    private String extensionJson(Consumer<List<ExtensionJson>> content) throws JacksonException {
         var json = new ArrayList<ExtensionJson>();
         content.accept(json);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
     private void mockNamespaceMemberships(String userRole) {
@@ -668,24 +1275,27 @@ class UserAPITest {
         membership2.setRole(NamespaceMembership.ROLE_CONTRIBUTOR);
 
         Mockito.when(repositories.findMembershipsForOwner(userData, "foobar"))
-                .thenReturn(userRole.equals(NamespaceMembership.ROLE_OWNER) ? List.of(membership1, membership2) : Collections.emptyList());
+                .thenReturn(
+                        userRole.equals(NamespaceMembership.ROLE_OWNER)
+                                ? List.of(membership1, membership2)
+                                : Collections.emptyList());
     }
 
-    private String membershipsJson(Consumer<NamespaceMembershipListJson> content) throws JsonProcessingException {
+    private String membershipsJson(Consumer<NamespaceMembershipListJson> content) throws JacksonException {
         var json = new NamespaceMembershipListJson();
         json.setNamespaceMemberships(new ArrayList<>());
         content.accept(json);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
-    private String successJson(String message) throws JsonProcessingException {
+    private String successJson(String message) throws JacksonException {
         var json = ResultJson.success(message);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
-    private String errorJson(String message) throws JsonProcessingException {
+    private String errorJson(String message) throws JacksonException {
         var json = ResultJson.error(message);
-        return new ObjectMapper().writeValueAsString(json);
+        return JsonMapper.shared().writeValueAsString(json);
     }
 
     private Namespace mockNamespace() {
@@ -695,7 +1305,7 @@ class UserAPITest {
                 .thenReturn(namespace);
         Mockito.when(repositories.findActiveExtensions(namespace))
                 .thenReturn(Streamable.empty());
-        Mockito.when(repositories.hasMemberships(namespace, NamespaceMembership.ROLE_OWNER))
+        Mockito.when(repositories.isVerified(namespace))
                 .thenReturn(false);
         return namespace;
     }
@@ -704,13 +1314,20 @@ class UserAPITest {
         return major + ".0.0";
     }
 
-    private List<ExtensionVersion> mockExtension(UserData user, int numberOfVersions, int numberOfBundles, int numberOfDependants) {
+    private List<ExtensionVersion> mockExtension(
+            UserData user,
+            int numberOfVersions,
+            int numberOfBundles,
+            int numberOfDependants
+    ) {
         var namespace = mockNamespace();
         var extension = new Extension();
         extension.setNamespace(namespace);
         extension.setName("baz");
         extension.setActive(true);
         Mockito.when(repositories.findExtension("baz", "foobar"))
+                .thenReturn(extension);
+        Mockito.when(repositories.findExtensionForUpdateNoWait("baz", "foobar"))
                 .thenReturn(extension);
 
         var versions = new ArrayList<ExtensionVersion>(numberOfVersions);
@@ -723,20 +1340,29 @@ class UserAPITest {
             versions.add(extVersion);
             Mockito.when(repositories.findFiles(extVersion))
                     .thenReturn(Streamable.empty());
-            Mockito.when(repositories.findVersion(user, extVersion.getVersion(), TargetPlatform.NAME_UNIVERSAL, "baz", "foobar"))
+            Mockito.when(
+                    repositories.findVersionPublishedByUser(
+                            user,
+                            extVersion.getVersion(),
+                            TargetPlatform.NAME_UNIVERSAL,
+                            "baz",
+                            "foobar"))
                     .thenReturn(extVersion);
         }
 
         extension.getVersions().addAll(versions);
         Mockito.when(repositories.findVersions(extension))
                 .thenReturn(Streamable.of(versions));
-        Mockito.when(repositories.findLatestVersions(user)).thenReturn(List.of(versions.get(versions.size() - 1)));
-        Mockito.when(repositories.isDeleteAllVersions(eq("foobar"), eq("baz"), any(List.class), eq(user))).then(new Answer<Boolean>() {
-            @Override
-            public Boolean answer(InvocationOnMock invocation) throws Throwable {
-                return invocation.getArgument(2, List.class).size() == numberOfVersions;
-            }
-        });
+        Mockito.when(repositories.findLatestVersions(user)).thenReturn(List.of(versions.getLast()));
+        Mockito.when(
+                repositories
+                        .isDeleteAllActiveVersions(eq("foobar"), eq("baz"), any(TargetPlatformVersion[].class)))
+                .then(new Answer<Boolean>() {
+                    @Override
+                    public Boolean answer(InvocationOnMock invocation) {
+                        return ((TargetPlatformVersion[]) invocation.getRawArguments()[2]).length == numberOfVersions;
+                    }
+                });
 
         var bundleExt = new Extension();
         bundleExt.setName("bundle");
@@ -779,6 +1405,12 @@ class UserAPITest {
     @Import(SecurityConfig.class)
     static class TestConfig {
         @Bean
+        org.eclipse.openvsx.admin.PermissionRegistry permissionRegistry() {
+            return new org.eclipse.openvsx.admin.PermissionRegistry(
+                    java.util.List.of(new org.eclipse.openvsx.admin.BuiltInPermissions()));
+        }
+
+        @Bean
         TransactionTemplate transactionTemplate() {
             return new MockTransactionTemplate();
         }
@@ -793,7 +1425,24 @@ class UserAPITest {
                 @Autowired(required = false) ClientRegistrationRepository clientRegistrationRepository,
                 OAuth2AttributesConfig attributesConfig
         ) {
-            return new UserService(entityManager, repositories, storageUtil, cache, validator, clientRegistrationRepository, attributesConfig);
+            return new UserService(
+                    entityManager,
+                    repositories,
+                    storageUtil,
+                    cache,
+                    validator,
+                    clientRegistrationRepository,
+                    attributesConfig);
+        }
+
+        @Bean
+        UUIDService uuidService() {
+            return new UUIDService();
+        }
+
+        @Bean
+        AccessTokenConfig tokenConfig() {
+            return new AccessTokenConfig();
         }
 
         @Bean
@@ -801,29 +1450,18 @@ class UserAPITest {
                 AccessTokenConfig config,
                 EntityManager entityManager,
                 RepositoryService repositories,
-                MailService mailService
+                MailService mailService,
+                DSLContext dsl
         ) {
-            return new AccessTokenService(config, entityManager, repositories, mailService);
+            return new AccessTokenService(config, entityManager, repositories, mailService, dsl);
         }
 
         @Bean
         OAuth2UserServices oauth2UserServices(
                 UserService users,
-                EclipseTokenService eclipseTokenService,
-                EntityManager entityManager,
-                EclipseService eclipse,
                 OAuth2AttributesConfig attributesConfig
         ) {
-            return new OAuth2UserServices(users, eclipseTokenService, entityManager, eclipse, attributesConfig);
-        }
-
-        @Bean
-        EclipseTokenService eclipseTokenService(
-                TransactionTemplate transactions,
-                EntityManager entityManager,
-                ClientRegistrationRepository clientRegistrationRepository
-        ) {
-            return new EclipseTokenService(transactions, entityManager, clientRegistrationRepository);
+            return new OAuth2UserServices(users, List.of(), attributesConfig);
         }
 
         @Bean
@@ -842,7 +1480,7 @@ class UserAPITest {
                 SearchUtilService search,
                 ExtensionValidator validator,
                 StorageUtilService storageUtil,
-                EclipseService eclipse,
+                PublisherAgreementService eclipse,
                 CacheService cache,
                 ExtensionVersionIntegrityService integrityService,
                 SimilarityCheckService similarityCheckService
@@ -860,8 +1498,11 @@ class UserAPITest {
                     eclipse,
                     cache,
                     integrityService,
-                    similarityCheckService
-            );
+                    similarityCheckService,
+                    TestSizeLimits.atConfigDefault(),
+                    new TrustedPublishingConfig(),
+                    new WebUiProperties(),
+                    Duration.ofSeconds(30));
         }
 
         @Bean
@@ -896,7 +1537,7 @@ class UserAPITest {
                 ExtensionScanPersistenceService scanPersistenceService
         ) {
             return new ExtensionService(
-                    new PublishingConfig(),
+                    TestSizeLimits.atConfigDefault(),
                     entityManager,
                     repositories,
                     search,
@@ -905,8 +1546,7 @@ class UserAPITest {
                     publishHandler,
                     scheduler,
                     extensionScanService,
-                    scanPersistenceService
-            );
+                    scanPersistenceService);
         }
     }
 }

@@ -1,21 +1,25 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.util;
+
+import java.util.List;
+
+import org.springframework.cache.annotation.Cacheable;
+import org.springframework.stereotype.Service;
 
 import org.eclipse.openvsx.entities.Extension;
 import org.eclipse.openvsx.entities.ExtensionVersion;
 import org.eclipse.openvsx.repositories.RepositoryService;
-import org.springframework.cache.annotation.Cacheable;
-import org.springframework.stereotype.Service;
-
-import java.util.List;
 
 import static org.eclipse.openvsx.cache.CacheService.*;
 
@@ -36,7 +40,10 @@ public class VersionService {
      *                    parameter, either only pre-releases are considered or not at all
      * @return a list of the latest {@code ExtensionVersion} for the given {@code Extension} grouped by target platform
      */
-    @Cacheable(value = CACHE_LATEST_EXTENSION_VERSIONS_BY_PLATFORM, keyGenerator = GENERATOR_LATEST_EXTENSION_VERSIONS_BY_PLATFORM)
+    @Cacheable(
+        value = CACHE_LATEST_EXTENSION_VERSIONS_BY_PLATFORM,
+        keyGenerator = GENERATOR_LATEST_EXTENSION_VERSIONS_BY_PLATFORM
+    )
     public List<ExtensionVersion> getLatestByTargetPlatform(Extension extension, boolean preReleases) {
         return repositories.findLatestVersionByTargetPlatform(extension, preReleases, true);
     }
@@ -49,13 +56,17 @@ public class VersionService {
 
     // groupedByTargetPlatform is used by cache key generator, don't remove this parameter
     @Cacheable(value = CACHE_LATEST_EXTENSION_VERSION, keyGenerator = GENERATOR_LATEST_EXTENSION_VERSION)
-    public ExtensionVersion getLatest(List<ExtensionVersion> versions, boolean groupedByTargetPlatform, boolean onlyPreRelease) {
-        if(versions == null || versions.isEmpty()) {
+    public ExtensionVersion getLatest(
+            List<ExtensionVersion> versions,
+            boolean groupedByTargetPlatform,
+            boolean onlyPreRelease
+    ) {
+        if (versions == null || versions.isEmpty()) {
             return null;
         }
 
         var stream = versions.stream();
-        if(onlyPreRelease) {
+        if (onlyPreRelease) {
             stream = stream.filter(ExtensionVersion::isPreRelease);
         }
 

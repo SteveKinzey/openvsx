@@ -11,7 +11,7 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 
-import type { SyntheticEvent } from "react";
+import type { SyntheticEvent } from 'react';
 import { FunctionComponent, useContext } from 'react';
 import { Box, Typography } from '@mui/material';
 import { ScanProvider } from '../../context/scan-admin';
@@ -22,10 +22,11 @@ import {
     ScansTabContent,
     QuarantinedTabContent,
     AutoRejectedTabContent,
+    ErrorsTabContent,
     AllowListTabContent,
     BlockListTabContent,
     QuarantineDialog,
-    FileDialog,
+    FileDialog
 } from '../../components/scan-admin';
 import { MainContext } from '../../context';
 
@@ -44,13 +45,14 @@ const ScanAdminContent: FunctionComponent = () => {
     };
 
     return (
-        <Box sx={{
-            width: '100%',
-            maxWidth: 'none',
-            mx: 'auto',
-            px: 2,
-            pb: 3,
-        }}>
+        <Box
+            sx={{
+                width: '100%',
+                maxWidth: 'none',
+                mx: 'auto',
+                px: 2,
+                pb: 3
+            }}>
             <Typography variant='h5' gutterBottom sx={{ mb: 2 }}>
                 Extension Scans
             </Typography>
@@ -58,7 +60,7 @@ const ScanAdminContent: FunctionComponent = () => {
                 <TabToolbar
                     selectedTab={selectedTab}
                     onTabChange={handleTabChange}
-                    tabs={['Scans', 'Quarantined', 'Auto Rejected', 'Allowed Files', 'Blocked Files']}
+                    tabs={['Scans', 'Quarantined', 'Auto Rejected', 'Errors', 'Allowed Files', 'Blocked Files']}
                 />
 
                 {/* Tab panels - each tab content component consumes context via hooks */}
@@ -75,10 +77,14 @@ const ScanAdminContent: FunctionComponent = () => {
                 </TabPanel>
 
                 <TabPanel value={selectedTab} index={3}>
-                    <AllowListTabContent />
+                    <ErrorsTabContent />
                 </TabPanel>
 
                 <TabPanel value={selectedTab} index={4}>
+                    <AllowListTabContent />
+                </TabPanel>
+
+                <TabPanel value={selectedTab} index={5}>
                     <BlockListTabContent />
                 </TabPanel>
             </Box>
@@ -95,10 +101,10 @@ const ScanAdminContent: FunctionComponent = () => {
  * This is the entry point for the scan administration feature.
  */
 export const ScanAdmin: FunctionComponent = () => {
-    const { service, handleError } = useContext(MainContext);
+    const { service } = useContext(MainContext);
 
     return (
-        <ScanProvider service={service} handleError={handleError}>
+        <ScanProvider service={service}>
             <ScanAdminContent />
         </ScanProvider>
     );

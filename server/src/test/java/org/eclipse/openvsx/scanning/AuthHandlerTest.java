@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,11 +6,14 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
+
+import java.util.Base64;
+import java.util.Map;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,9 +21,6 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.client.RestTemplate;
-
-import java.util.Base64;
-import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -30,7 +30,8 @@ import static org.junit.jupiter.api.Assertions.*;
 @ExtendWith(MockitoExtension.class)
 class AuthHandlerTest {
 
-    @Mock RestTemplate restTemplate;
+    @Mock
+    RestTemplate restTemplate;
 
     @Test
     void applyAuth_doesNothingWhenNoConfig() {
@@ -157,7 +158,7 @@ class AuthHandlerTest {
         String authHeader = headers.getFirst("Authorization");
         assertNotNull(authHeader);
         assertTrue(authHeader.startsWith("Basic "));
-        
+
         // Decode and verify credentials
         String encoded = authHeader.substring("Basic ".length());
         String decoded = new String(Base64.getDecoder().decode(encoded));

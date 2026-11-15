@@ -7,54 +7,181 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
+import * as fs from 'fs';
+import * as path from 'path';
+import * as semver from 'semver';
 import { createVSIX, IPackageOptions } from '@vscode/vsce';
 import { getPAT } from './pat';
-import { createTempFile, addEnvOptions } from './util';
+import {
+    getTempFilePath,
+    addEnvOptions,
+    addTrustedPublishingEnvOptions,
+    formatBytes,
+    Manifest,
+    StatusError
+} from './util';
 import { Extension, Registry } from './registry';
 import { checkLicense } from './check-license';
 import { readVSIXPackage } from './zip';
 import { PublishOptions, PublishCommonOptions } from './publish-options';
+import { getTrustedPublishingToken, refreshTrustedPublishingToken, useTrustedPublishing } from './trusted-publishing';
+
+/** Registries older than this cannot report the limit that applies to a namespace. */
+const MIN_SIZE_LIMIT_REGISTRY_VERSION = '1.3.0';
 
 /**
  * Publishes an extension.
  */
 export async function publish(options: PublishOptions = {}): Promise<PromiseSettledResult<void>[]> {
     addEnvOptions(options);
+    addTrustedPublishingEnvOptions(options);
+
     const internalPublishOptions: InternalPublishOptions[] = [];
+    const prepackagedFiles: string[] = [];
     const packagePaths = options.packagePath || [undefined];
     const targets = options.targets || [undefined];
     for (const packagePath of packagePaths) {
-        for (const target of targets) {
-            internalPublishOptions.push({ ...options, packagePath: packagePath, target: target });
+        const extensionFile = options.extensionFile ?? (packagePath?.endsWith('.vsix') ? packagePath : undefined);
+        if (extensionFile !== undefined) {
+            prepackagedFiles.push(extensionFile);
+            // A package is already built for its target, so it is published once, not once per target.
+            internalPublishOptions.push({ ...options, extensionFile, packagePath: undefined, target: undefined });
+        } else {
+            for (const target of targets) {
+                internalPublishOptions.push({ ...options, packagePath, target });
+            }
+        }
+    }
+    // Before the registry is contacted, so a slow or failing lookup cannot keep these from being seen.
+    warnIgnoredPackagingOptions(options, prepackagedFiles);
+
+    // Shared by every target/package below, rather than one per artifact: besides saving the extra
+    // `/api/version` round trips, it's also where the registry's reported version is cached (see
+    // Registry.tokenQuery), so a wide fan-out doesn't repeat that lookup once per target either.
+    const registry = new Registry(options);
+    const maxExtensionSize = await getMaxExtensionSize(registry);
+    const prompts = new PromptQueue();
+
+    return Promise.allSettled(internalPublishOptions.map(publishOptions =>
+        doPublish(registry, prompts, { ...publishOptions, maxExtensionSize })));
+}
+
+/**
+ * The targets and packages publish in parallel but share one terminal, so every step that may prompt
+ * runs here: one at a time, and once per key, with later callers sharing the first one's outcome.
+ */
+class PromptQueue {
+    private tail: Promise<unknown> = Promise.resolve();
+    private readonly steps = new Map<string, Promise<unknown>>();
+
+    once<T>(key: string, step: () => Promise<T>): Promise<T> {
+        let result = this.steps.get(key) as Promise<T> | undefined;
+        if (!result) {
+            result = this.tail.then(step);
+            this.tail = result.catch(() => undefined);
+            this.steps.set(key, result);
+        }
+        return result;
+    }
+}
+
+/**
+ * Names the files in the warning: next to a directory being packaged, the options still apply to that.
+ */
+function warnIgnoredPackagingOptions(options: PublishOptions, prepackagedFiles: string[]): void {
+    const files = [...new Set(prepackagedFiles)];
+    if (files.length === 0) {
+        return;
+    }
+    const subject = `${files.length === 1 ? 'extension' : 'extensions'} ${files.map(file => `'${file}'`).join(', ')}`;
+    for (const [flag, key] of PACKAGING_OPTIONS) {
+        // An explicit `false` is not a flag that was given.
+        if (options[key] !== undefined && options[key] !== false) {
+            console.warn(`Ignoring option '${flag}' for prepackaged ${subject}.`);
+        }
+    }
+}
+
+/**
+ * Options that only affect packaging, with the CLI flag that sets each, in the order they are reported
+ * as ignored for a prepackaged extension. `--no-dependencies` is left out: the CLI always sets
+ * `dependencies`, so whether it was given cannot be told apart.
+ */
+export const PACKAGING_OPTIONS: ReadonlyArray<readonly [string, keyof PublishOptions]> = [
+    ['--target', 'targets'],
+    ['--baseContentUrl', 'baseContentUrl'],
+    ['--baseImagesUrl', 'baseImagesUrl'],
+    ['--yarn', 'yarn'],
+    ['--follow-symlinks', 'followSymlinks'],
+    ['--packageVersion', 'packageVersion'],
+    ['--allow-missing-repository', 'allowMissingRepository'],
+    ['--pre-release', 'preRelease']
+];
+
+/**
+ * Looks up the registry's default extension size limit, so an oversized package can be flagged
+ * before the upload instead of after transferring the whole payload.
+ *
+ * Best-effort: registries that don't expose `/api/version`, or don't report a limit, return
+ * `undefined` here, and nothing is said about the size.
+ */
+async function getMaxExtensionSize(registry: Registry): Promise<number | undefined> {
+    try {
+        return (await registry.getRegistryVersion()).maxExtensionSize || undefined;
+    } catch {
+        return undefined;
+    }
+}
+
+async function doPublish(registry: Registry, prompts: PromptQueue, options: InternalPublishOptions = {}): Promise<void> {
+    // Only a package created here is a temp file; one the user supplied must never be deleted.
+    const packaged = !options.extensionFile;
+    try {
+        if (packaged) {
+            await packageExtension(options, registry, prompts);
+            console.log(); // new line
+        }
+        await publishExtensionFile(registry, prompts, options);
+    } finally {
+        if (packaged && options.extensionFile) {
+            // Caught rather than awaited plainly: a failure here (e.g. the temp dir is locked or
+            // read-only) must not replace whatever error publishExtensionFile already threw above.
+            await fs.promises.rm(options.extensionFile, { force: true }).catch(err => {
+                console.warn(`Could not delete temporary file ${options.extensionFile}: ${err.message}`);
+            });
+        }
+    }
+}
+
+async function publishExtensionFile(registry: Registry, prompts: PromptQueue, options: InternalPublishOptions): Promise<void> {
+    // Read up front rather than only when a token has to be obtained: the size limit is looked up per
+    // namespace, and the namespace lives in the manifest.
+    const manifest = await readVSIXPackage(options.extensionFile!);
+
+    // Set only when this publish obtained the token itself through trusted publishing, which is the one
+    // case where a refusal can be answered by asking for a new token.
+    let exchanged: { namespace: string; extension: string } | undefined;
+    if (!options.pat) {
+        if (useTrustedPublishing(options)) {
+            exchanged = { namespace: manifest.publisher, extension: manifest.name };
+            options.pat = await getTrustedPublishingToken(registry, manifest.publisher, manifest.name, options);
+        } else {
+            options.pat = await prompts.once(`pat:${manifest.publisher}`, async () => {
+                // getPAT has verified a prompted token already, so it can be stored before publishing
+                const { pat, save } = await getPAT(manifest.publisher, options);
+                await save();
+                return pat;
+            });
         }
     }
 
-    return Promise.allSettled(internalPublishOptions.map(publishOptions => doPublish(publishOptions)));
-}
-
-async function doPublish(options: InternalPublishOptions = {}): Promise<void> {
-    // if the packagePath is a link to a vsix, don't need to package it
-    if (options.packagePath?.endsWith('.vsix')) {
-        options.extensionFile = options.packagePath;
-        delete options.packagePath;
-        delete options.target;
-    }
-    const registry = new Registry(options);
-    if (!options.extensionFile) {
-        await packageExtension(options, registry);
-        console.log(); // new line
-    } else if (options.preRelease) {
-        console.warn("Ignoring option '--pre-release' for prepackaged extension.");
-    }
-
-    if (!options.pat) {
-        const namespace = (await readVSIXPackage(options.extensionFile!)).publisher;
-        options.pat = await getPAT(namespace, options);
-    }
+    // After the token is resolved, because the lookup is authenticated - and by here a token always
+    // exists, whether supplied, fetched, or exchanged through trusted publishing.
+    const sizeLimit = await ensureWithinSizeLimit(registry, options, manifest);
 
     let extension: Extension | undefined;
     try {
-        extension = await registry.publish(options.extensionFile!, options.pat);
+        extension = await doRegistryPublish(registry, options, exchanged, sizeLimit);
     } catch (err) {
         if (options.skipDuplicate && err.message.endsWith('is already published.')) {
             console.log(err.message + ' Skipping publish.');
@@ -79,12 +206,137 @@ async function doPublish(options: InternalPublishOptions = {}): Promise<void> {
     }
 }
 
-async function packageExtension(options: InternalPublishOptions, registry: Registry): Promise<void> {
-    if (registry.requiresLicense) {
-        await checkLicense(options.packagePath!);
+/**
+ * Publishes the package, exchanging the ID token again if the registry refuses the trusted publishing
+ * token this was using. The issued token is short-lived and shared by every target platform of a
+ * release, so publishing a wide fan-out of large packages can outlive it and be refused partway
+ * through - having authorised the release and then failing it over an expiry would be the wrong call.
+ *
+ * Only ever retried once, and only for a token obtained here: nothing this can do makes a token the
+ * user supplied valid, and a second refusal means the token is not the problem.
+ */
+async function doRegistryPublish(
+    registry: Registry,
+    options: InternalPublishOptions,
+    exchanged: { namespace: string; extension: string } | undefined,
+    sizeLimit?: number
+): Promise<Extension> {
+    try {
+        return await registry.publish(options.extensionFile!, options.pat!, sizeLimit);
+    } catch (err) {
+        if (!exchanged || (err as StatusError)?.status !== 401) {
+            throw err;
+        }
+
+        console.log('The registry refused the publishing token, requesting a new one');
+        options.pat = await refreshTrustedPublishingToken(
+            registry,
+            exchanged.namespace,
+            exchanged.extension,
+            options,
+            options.pat!
+        );
+        return registry.publish(options.extensionFile!, options.pat, sizeLimit);
+    }
+}
+
+/**
+ * Refuses a package the registry would reject anyway, before uploading it, and reports how many
+ * bytes it has concluded may be sent - the caller raises the transport cap to that, so nothing we
+ * decided to upload is then refused locally.
+ *
+ * The limit is the one that applies to this package's namespace and extension, which a size override
+ * can raise above the registry default. Registries older than
+ * {@link MIN_SIZE_LIMIT_REGISTRY_VERSION} cannot report it, so there the check stays advisory: it
+ * warns against the default and publishes, rather than refusing an upload those registries would
+ * have accepted.
+ */
+async function ensureWithinSizeLimit(
+    registry: Registry,
+    options: InternalPublishOptions,
+    manifest: Manifest
+): Promise<number | undefined> {
+    const { size } = await fs.promises.stat(options.extensionFile!);
+    const limit = await resolveSizeLimit(registry, options, manifest);
+
+    if (limit.kind === 'failed') {
+        // Always said, however small the package: a size override can lower a limit as well as raise
+        // it, so there is no size from which it follows that this upload is fine. Staying quiet here
+        // left a registry whose /api/-/* routes never arrive indistinguishable from a working one.
+        console.warn(
+            `Could not check the size limit for ${manifest.publisher}.${manifest.name} at ${registry.url} `
+            + `(${limit.reason}). Publishing anyway: the registry enforces its own limit, so an oversized `
+            + `package is refused after the upload rather than before it.`
+        );
+    } else if (limit.kind === 'unsupported') {
+        const fallback = options.maxExtensionSize;
+        if (fallback && size > fallback) {
+            console.warn(
+                `The extension package (${formatBytes(size)}, ${size} bytes) exceeds the default size limit of `
+                + `${formatBytes(fallback)} (${fallback} bytes) `
+                + `reported by the registry at ${registry.url}, which is too old to report the limit for a `
+                + `single namespace. Publishing anyway: the namespace may have a different limit configured, `
+                + `and the registry decides.`
+            );
+        }
     }
 
-    options.extensionFile = await createTempFile({ postfix: '.vsix' });
+    if (limit.kind !== 'resolved') {
+        // The allowance is this package, not the built-in publish size: having decided to send it and
+        // let the registry answer, the transport cap must not be what refuses it instead. An older
+        // registry whose default is above 512 MiB would otherwise reject a package it would accept.
+        return size;
+    }
+
+    if (size > limit.limit) {
+        throw new Error(
+            `The extension package (${formatBytes(size)}, ${size} bytes) exceeds the size limit of `
+            + `${formatBytes(limit.limit)} (${limit.limit} bytes) `
+            + `for ${manifest.publisher}.${manifest.name} at ${registry.url}.`
+        );
+    }
+    return limit.limit;
+}
+
+/**
+ * The limit for this namespace/extension. A registry too old to report one and a registry that could
+ * not answer are told apart: both publish anyway, but only the second one means a check the user is
+ * entitled to expect did not happen.
+ */
+type SizeLimitLookup =
+    | { kind: 'resolved'; limit: number }
+    | { kind: 'unsupported' }
+    | { kind: 'failed'; reason: string };
+
+async function resolveSizeLimit(
+    registry: Registry,
+    options: InternalPublishOptions,
+    manifest: Manifest
+): Promise<SizeLimitLookup> {
+    const reported = await registry.getRegistryVersion().catch(() => undefined);
+    const version = reported?.version ? semver.coerce(reported.version) : undefined;
+    if (!version || semver.lt(version, MIN_SIZE_LIMIT_REGISTRY_VERSION)) {
+        return { kind: 'unsupported' };
+    }
+
+    try {
+        const { maxSize } = await registry.getSizeLimit(manifest.publisher, manifest.name, options.pat!);
+        return { kind: 'resolved', limit: maxSize };
+    } catch (err) {
+        // The registry claims to be new enough but could not answer. It enforces the limit itself
+        // regardless, so publish rather than refusing on a failed lookup.
+        return { kind: 'failed', reason: err instanceof Error ? err.message : String(err) };
+    }
+}
+
+async function packageExtension(options: InternalPublishOptions, registry: Registry, prompts: PromptQueue): Promise<void> {
+    if (registry.requiresLicense) {
+        // Per directory, not per target: a license added here is written into the sources every target packages.
+        const packagePath = options.packagePath;
+        await prompts.once(`license:${path.resolve(packagePath ?? '.')}`, () => checkLicense(packagePath!));
+    }
+
+    options.extensionFile = getTempFilePath('.vsix');
     const packageOptions: IPackageOptions = {
         packagePath: options.extensionFile,
         target: options.target,
@@ -92,8 +344,10 @@ async function packageExtension(options: InternalPublishOptions, registry: Regis
         baseContentUrl: options.baseContentUrl,
         baseImagesUrl: options.baseImagesUrl,
         useYarn: options.yarn,
+        followSymlinks: options.followSymlinks,
         dependencies: options.dependencies,
         preRelease: options.preRelease,
+        allowMissingRepository: options.allowMissingRepository,
         version: options.packageVersion
     };
     await createVSIX(packageOptions);
@@ -119,4 +373,11 @@ interface InternalPublishOptions extends PublishCommonOptions {
      * Whether to do dependency detection via npm or yarn
      */
     dependencies?: boolean;
+
+    /**
+     * The registry's default extension size limit in bytes, looked up once via `/api/version` and
+     * shared across every target/package being published. Advisory: a namespace override can allow
+     * more. `undefined` when it couldn't be determined.
+     */
+    maxExtensionSize?: number;
 }

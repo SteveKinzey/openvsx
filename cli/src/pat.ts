@@ -7,11 +7,11 @@
  *
  * SPDX-License-Identifier: EPL-2.0
  * ****************************************************************************** */
+import { password } from '@inquirer/prompts';
 import { CreateNamespaceOptions } from './create-namespace-options';
 import { PublishOptions } from './publish-options';
 import { VerifyPatOptions } from './verify-pat-options';
 import { Registry } from './registry';
-import { getUserInput } from './util';
 import { openDefaultStore } from './store';
 
 export async function doVerifyPat(options: VerifyPatOptions) {
@@ -26,7 +26,11 @@ export async function doVerifyPat(options: VerifyPatOptions) {
 }
 
 export async function requestPAT(namespace: string, options: CreateNamespaceOptions | PublishOptions | VerifyPatOptions, verify: boolean = true): Promise<string> {
-    const pat = await getUserInput(`Personal Access Token for namespace '${namespace}':`);
+    const pat = await password({
+        message: `Personal Access Token for namespace '${namespace}':`,
+        mask: true,
+        validate: value => value.trim().length > 0 || 'A personal access token is required.'
+    });
     if (verify) {
         await doVerifyPat({ ...options, namespace, pat });
     }
@@ -34,19 +38,32 @@ export async function requestPAT(namespace: string, options: CreateNamespaceOpti
     return pat;
 }
 
-export async function getPAT(namespace: string, options: CreateNamespaceOptions | PublishOptions | VerifyPatOptions, verify: boolean = true): Promise<string> {
+export interface ResolvedPAT {
+    pat: string;
+    /** Stores a prompted token, warning instead of throwing; call it only once the registry has accepted the token. */
+    save(): Promise<void>;
+}
+
+export async function getPAT(namespace: string, options: CreateNamespaceOptions | PublishOptions | VerifyPatOptions, verify: boolean = true): Promise<ResolvedPAT> {
+    const nothingToSave = async () => undefined;
     if (options?.pat) {
-        return options.pat;
+        return { pat: options.pat, save: nothingToSave };
     }
 
     const store = await openDefaultStore();
-    let pat = store.get(namespace);
-    if (pat) {
-        return pat;
+    const stored = await store.get(namespace);
+    if (stored) {
+        return { pat: stored, save: nothingToSave };
     }
 
-    pat = await requestPAT(namespace, options, verify);
-    await store.add(namespace, pat);
-
-    return pat;
+    const pat = await requestPAT(namespace, options, verify);
+    // a storage failure must not turn a completed registry operation into a reported failure
+    const save = async () => {
+        try {
+            await store.add(namespace, pat);
+        } catch (e) {
+            console.warn(`Could not store the token: ${e instanceof Error ? e.message : e}`);
+        }
+    };
+    return { pat, save };
 }

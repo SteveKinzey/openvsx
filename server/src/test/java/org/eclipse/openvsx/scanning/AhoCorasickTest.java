@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,15 +6,15 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
 
-import org.junit.jupiter.api.Test;
-
 import java.util.Set;
+
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -26,8 +26,8 @@ class AhoCorasickTest {
     @Test
     void search_findsSimpleKeyword() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("secret"))
-            .build();
+                .addKeywords(Set.of("secret"))
+                .build();
 
         var matches = ac.search("this is a secret value");
 
@@ -40,8 +40,8 @@ class AhoCorasickTest {
     @Test
     void search_findsMultipleKeywords() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("api", "key", "token"))
-            .build();
+                .addKeywords(Set.of("api", "key", "token"))
+                .build();
 
         var matches = ac.search("api_key and token");
 
@@ -55,8 +55,8 @@ class AhoCorasickTest {
     @Test
     void search_findsOverlappingPatterns() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("abc", "bc", "c"))
-            .build();
+                .addKeywords(Set.of("abc", "bc", "c"))
+                .build();
 
         var matches = ac.search("abc");
 
@@ -67,8 +67,8 @@ class AhoCorasickTest {
     @Test
     void search_returnsEmptyForNoMatch() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("secret", "password"))
-            .build();
+                .addKeywords(Set.of("secret", "password"))
+                .build();
 
         var matches = ac.search("nothing to find here");
 
@@ -78,8 +78,8 @@ class AhoCorasickTest {
     @Test
     void search_handlesCaseSensitivity() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("secret"))
-            .build();
+                .addKeywords(Set.of("secret"))
+                .build();
 
         // Lowercase search should find lowercase pattern
         var matches = ac.search("secret");
@@ -93,8 +93,8 @@ class AhoCorasickTest {
     @Test
     void search_findsMultipleOccurrences() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("test"))
-            .build();
+                .addKeywords(Set.of("test"))
+                .build();
 
         var matches = ac.search("test test test");
 
@@ -107,8 +107,8 @@ class AhoCorasickTest {
     @Test
     void search_handlesEmptyText() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("secret"))
-            .build();
+                .addKeywords(Set.of("secret"))
+                .build();
 
         var matches = ac.search("");
 
@@ -122,10 +122,10 @@ class AhoCorasickTest {
         keywords.add("valid");
         keywords.add("");
         keywords.add(null);
-        
+
         var ac = AhoCorasick.builder()
-            .addKeywords(keywords)
-            .build();
+                .addKeywords(keywords)
+                .build();
 
         var matches = ac.search("valid keyword");
 
@@ -136,8 +136,8 @@ class AhoCorasickTest {
     @Test
     void search_findsKeywordAtStart() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("start"))
-            .build();
+                .addKeywords(Set.of("start"))
+                .build();
 
         var matches = ac.search("start of text");
 
@@ -148,8 +148,8 @@ class AhoCorasickTest {
     @Test
     void search_findsKeywordAtEnd() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("end"))
-            .build();
+                .addKeywords(Set.of("end"))
+                .build();
 
         var matches = ac.search("at the end");
 
@@ -160,8 +160,8 @@ class AhoCorasickTest {
     @Test
     void search_handlesSpecialCharacters() {
         var ac = AhoCorasick.builder()
-            .addKeywords(Set.of("api_key", "auth-token"))
-            .build();
+                .addKeywords(Set.of("api_key", "auth-token"))
+                .build();
 
         var matches = ac.search("use api_key or auth-token");
 
@@ -178,24 +178,24 @@ class AhoCorasickTest {
         assertTrue(str.contains("5"));
         assertTrue(str.contains("9"));
     }
-    
+
     @Test
     void builder_cannotBeReused() {
         var builder = AhoCorasick.builder().addKeyword("test");
         builder.build();
-        
+
         assertThrows(IllegalStateException.class, () -> builder.addKeyword("another"));
         assertThrows(IllegalStateException.class, builder::build);
     }
-    
+
     @Test
     void builder_addKeywordChains() {
         var ac = AhoCorasick.builder()
-            .addKeyword("one")
-            .addKeyword("two")
-            .addKeyword("three")
-            .build();
-            
+                .addKeyword("one")
+                .addKeyword("two")
+                .addKeyword("three")
+                .build();
+
         var matches = ac.search("one two three");
         assertEquals(3, matches.size());
     }

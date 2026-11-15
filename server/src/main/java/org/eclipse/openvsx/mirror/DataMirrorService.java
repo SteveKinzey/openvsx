@@ -1,18 +1,31 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.mirror;
+
+import java.util.*;
+import java.util.stream.Collectors;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import jakarta.persistence.EntityManager;
 import jakarta.transaction.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.stereotype.Component;
+import org.springframework.web.client.RestTemplate;
+
 import org.eclipse.openvsx.ExtensionService;
 import org.eclipse.openvsx.LocalRegistryService;
 import org.eclipse.openvsx.UpstreamRegistryService;
@@ -27,17 +40,8 @@ import org.eclipse.openvsx.json.UserJson;
 import org.eclipse.openvsx.repositories.RepositoryService;
 import org.eclipse.openvsx.storage.StorageUtilService;
 import org.eclipse.openvsx.util.NamingUtil;
+import org.eclipse.openvsx.util.TargetPlatformVersion;
 import org.eclipse.openvsx.util.TimeUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.stereotype.Component;
-import org.springframework.web.client.RestTemplate;
-
-import java.util.*;
-import java.util.stream.Collectors;
-
 
 @Component
 @ConditionalOnProperty(value = "ovsx.data.mirror.enabled", havingValue = "true")
@@ -112,37 +116,42 @@ public class DataMirrorService {
     public boolean needsMatch() {
         return !excludeExtensions.isEmpty() || !includeExtensions.isEmpty();
     }
-    
+
     public boolean match(String namespaceName, String extensionName) {
         var extensionId = NamingUtil.toExtensionId(namespaceName, extensionName);
         if (!excludeExtensions.isEmpty() &&
-            (excludeExtensions.contains(namespaceName + ".*") ||
-            excludeExtensions.contains(extensionId))) {
+                (excludeExtensions.contains(namespaceName + ".*") ||
+                        excludeExtensions.contains(extensionId))) {
             return false;
         }
         return includeExtensions.isEmpty() ||
-            includeExtensions.contains(namespaceName + ".*") ||
-            includeExtensions.contains(extensionId);
+                includeExtensions.contains(namespaceName + ".*") ||
+                includeExtensions.contains(extensionId);
     }
 
     @Transactional
-    public List<ExtensionVersion> getExtensionTargetVersions(String namespaceName, String extensionName, String targetPlatform) {
+    public List<ExtensionVersion> getExtensionTargetVersions(
+            String namespaceName,
+            String extensionName,
+            String targetPlatform
+    ) {
         var extension = repositories.findExtension(extensionName, namespaceName);
         if (extension == null) {
             return Collections.<ExtensionVersion>emptyList();
         }
-        return extension.getVersions().stream().filter(v -> targetPlatform.equals(v.getTargetPlatform())).collect(Collectors.toList());
+        return extension.getVersions().stream().filter(v -> targetPlatform.equals(v.getTargetPlatform()))
+                .collect(Collectors.toList());
     }
 
     @Transactional
     public UserData createMirrorUser() {
         var user = repositories.findUserByLoginName("system", userName);
-        if(user != null) {
+        if (user != null) {
             return user;
         }
 
         user = repositories.findUserByLoginName(null, userName);
-        if(user != null) {
+        if (user != null) {
             user.setProvider("system");
             return user;
         }
@@ -171,16 +180,23 @@ public class DataMirrorService {
     }
 
     public String getOrAddAccessTokenValue(UserData user, String description) {
-        var token = repositories.findAccessToken(user, description);
+        var token = repositories.findPersonalAccessToken(user, description);
         return token == null
-                ? tokens.createAccessToken(user, description).getValue()
+                ? tokens.createLongLivedAccessToken(user, description, null, null, false).getValue()
                 : token.getValue();
     }
 
     @Transactional
     public void activateExtension(String namespaceName, String extensionName) {
         var extension = repositories.findExtension(extensionName, namespaceName);
-        extension.getVersions().stream().filter(this::canActivate).forEach(extVersion -> extVersion.setActive(true));
+        // A mirrored version becomes available here rather than at the upstream timestamp it carries, so
+        // that the changes feed this mirror serves stays followable: an entry written at the upstream
+        // instant would land in a part of the feed that the mirror's own consumers have already read.
+        var now = TimeUtil.getCurrentUTC();
+        extension.getVersions().stream().filter(this::canActivate).forEach(extVersion -> {
+            extVersion.setActive(true);
+            repositories.recordExtensionVersionChange(extVersion, ExtensionVersionState.ACTIVE, now);
+        });
         extensions.updateExtension(extension);
     }
 
@@ -196,7 +212,7 @@ public class DataMirrorService {
         var url = storageUtil.getLocation(resource);
         try {
             backgroundRestTemplate.headForHeaders("{canGetVsixUri}", Map.of("canGetVsixUri", url));
-        } catch(Exception e) {
+        } catch (Exception e) {
             logger.error("failed to activate extension, vsix is invalid: {}", url, e);
             return false;
         }
@@ -238,29 +254,36 @@ public class DataMirrorService {
     }
 
     public void deleteExtensionVersion(ExtensionVersion extVersion, UserData user) {
+        // The mirror must not keep tombstones: versions dropped upstream are purged so the mirror can
+        // re-track upstream state (and re-publish a version that later reappears upstream).
+        // Purge by coordinates: the version was collected in a previous transaction and is detached here,
+        // so it has to be locked and re-read inside the purge transaction. This also removes the extension
+        // itself once its last version is gone.
         var extension = extVersion.getExtension();
-        admin.deleteExtension(
+        extensions.purgeExtensionNoWait(
+                user,
                 extension.getNamespace().getName(),
                 extension.getName(),
-                extVersion.getTargetPlatform(),
-                extVersion.getVersion(),
-                user
-        );
+                TargetPlatformVersion.of(extVersion.getTargetPlatform(), extVersion.getVersion()));
     }
 
     public void mirrorNamespaceMetadata(String namespaceName) {
         var remoteVerified = upstream.getNamespace(namespaceName).getVerified();
         var localVerified = local.getNamespace(namespaceName).getVerified();
-        if(!localVerified && remoteVerified) {
+        if (!localVerified && remoteVerified) {
             // verify the namespace by adding an owner to it
             var membership = repositories.findFirstMembership(namespaceName);
             users.addNamespaceMember(membership.getNamespace(), membership.getUser(), NamespaceMembership.ROLE_OWNER);
         }
-        if(localVerified && !remoteVerified) {
+        if (localVerified && !remoteVerified) {
             // unverify namespace by changing owner(s) back to contributor
             var namespace = repositories.findNamespace(namespaceName);
             repositories.findMemberships(namespace, NamespaceMembership.ROLE_OWNER)
-                    .forEach(membership -> users.addNamespaceMember(namespace, membership.getUser(), NamespaceMembership.ROLE_CONTRIBUTOR));
+                    .forEach(
+                            membership -> users.addNamespaceMember(
+                                    namespace,
+                                    membership.getUser(),
+                                    NamespaceMembership.ROLE_CONTRIBUTOR));
         }
     }
 
@@ -271,7 +294,7 @@ public class DataMirrorService {
     }
 
     public void ensureNamespace(String namespaceName) {
-        if(!repositories.namespaceExists(namespaceName)) {
+        if (!repositories.namespaceExists(namespaceName)) {
             var json = new NamespaceJson();
             json.setName(namespaceName);
             admin.createNamespace(json);

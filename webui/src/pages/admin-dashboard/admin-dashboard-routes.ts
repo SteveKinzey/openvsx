@@ -13,13 +13,18 @@ import { createRoute } from '../../utils';
 export namespace AdminDashboardRoutes {
     export const ROOT = 'admin-dashboard';
     export const MAIN = createRoute([ROOT]);
+    export const STATISTICS = createRoute([ROOT, 'statistics']);
     export const NAMESPACE_ADMIN = createRoute([ROOT, 'namespaces']);
     export const EXTENSION_ADMIN = createRoute([ROOT, 'extensions']);
     export const PUBLISHER_ADMIN = createRoute([ROOT, 'publisher']);
     export const SCANS_ADMIN = createRoute([ROOT, 'scans']);
-    export const TIERS = createRoute([ROOT, 'tiers']);
-    export const CUSTOMERS = createRoute([ROOT, 'customers']);
-    export const USAGE_STATS = createRoute([ROOT, 'usage']);
+    export const SIZE_OVERRIDES = createRoute([ROOT, 'size-overrides']);
     export const SETTINGS = createRoute([ROOT, 'settings']);
     export const LOGS = createRoute([ROOT, 'logs']);
+    export const ACCESS_CONTROL = createRoute([ROOT, 'access-control']);
+    export const CONSISTENCY = createRoute([ROOT, 'consistency']);
+    export const CACHES = createRoute([ROOT, 'caches']);
+    export const ANALYTICS_STATUS = createRoute([ROOT, 'analytics-status']);
+    export const SEARCH_INDEX = createRoute([ROOT, 'search-index']);
+    export const SEARCH_EXPLAIN = createRoute([ROOT, 'search-explain']);
 }

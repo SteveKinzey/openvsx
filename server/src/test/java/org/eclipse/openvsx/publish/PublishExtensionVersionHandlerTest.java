@@ -1,27 +1,32 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2025 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.publish;
-
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
-import static org.mockito.Mockito.verify;
-import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.function.Consumer;
+
+import jakarta.persistence.EntityManager;
+import org.jobrunr.scheduling.JobRequestScheduler;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
 
 import org.eclipse.openvsx.ExtensionProcessor;
 import org.eclipse.openvsx.ExtensionValidator;
@@ -31,15 +36,22 @@ import org.eclipse.openvsx.extension_control.ExtensionControlService;
 import org.eclipse.openvsx.repositories.RepositoryService;
 import org.eclipse.openvsx.scanning.ExtensionScanService;
 import org.eclipse.openvsx.util.ErrorResultException;
-import org.jobrunr.scheduling.JobRequestScheduler;
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
+import org.eclipse.openvsx.util.NamingUtil;
+import org.eclipse.openvsx.util.TargetPlatform;
+import org.eclipse.openvsx.util.TempFile;
+import org.eclipse.openvsx.util.auth.AccessTokenAuthentication;
+import org.eclipse.openvsx.util.auth.LoggedInAuthentication;
 
-import jakarta.persistence.EntityManager;
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class PublishExtensionVersionHandlerTest {
@@ -89,8 +101,7 @@ class PublishExtensionVersionHandlerTest {
                 users,
                 validator,
                 extensionControl,
-                scanService
-        );
+                scanService);
 
         // Lenient: not all tests need this mock
         org.mockito.Mockito.lenient()
@@ -111,32 +122,299 @@ class PublishExtensionVersionHandlerTest {
                             "publisher",
                             "demo",
                             "2.0.0",
-                            "Demo OK"
-                    )
-            );
+                            "Demo OK"));
 
             var namespace = buildNamespace("publisher");
             var user = new UserData();
-            var token = new PersonalAccessToken();
-            token.setUser(user);
+            var liu = new LoggedInAuthentication(user);
 
             when(repositories.findNamespace("publisher")).thenReturn(namespace);
             when(users.hasPublishPermission(user, namespace)).thenReturn(true);
             when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
             when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
             when(validator.validateMetadata(metadata)).thenReturn(List.of());
-            when(repositories.findExtension("demo", namespace)).thenReturn(null);
+            when(repositories.findExtensionForUpdate("demo", "publisher")).thenReturn(null);
 
             var capturedExtension = ArgumentCaptor.forClass(Extension.class);
 
-            var result = handler.createExtensionVersion(processor, token, LocalDateTime.now(), false);
+            var result = handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false);
 
             verify(entityManager).persist(capturedExtension.capture());
             verify(entityManager).persist(metadata);
             assertThat(result).isSameAs(metadata);
-            assertThat(result.getPublishedWith()).isEqualTo(token);
+            assertThat(result.getPublishedBy()).isEqualTo(user);
             assertThat(result.getExtension()).isSameAs(capturedExtension.getValue());
             assertThat(result.getExtension().getNamespace()).isSameAs(namespace);
+        }
+    }
+
+    @Test
+    void shouldFailWhenMaliciousListRefreshFailsButLastKnownListFlagsIt() throws IOException {
+        // getMaliciousExtensionIds() throws on a fetch failure rather than inventing a return value
+        // (see ExtensionControlService); isMalicious() must still catch that and fall back to the last
+        // known list rather than silently treating the extension as clean.
+        when(extensionControl.getMaliciousExtensionIds()).thenThrow(new IOException("connection reset"));
+        when(extensionControl.getLastKnownMaliciousExtensionIds())
+                .thenReturn(List.of(NamingUtil.toExtensionId("publisher", "demo")));
+
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            mockExtensionVersion("publisher", "demo", "2.0.0", null, processor);
+
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+            var liu = new LoggedInAuthentication(user);
+
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
+            when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("known malicious extension");
+        }
+    }
+
+    @Test
+    void shouldFailWhenMaliciousListLookupThrowsUncheckedExceptionButLastKnownListFlagsIt() throws IOException {
+        // getMaliciousExtensionIds() can also fail with a plain, unanticipated RuntimeException (not
+        // just its own IOException/JacksonException) - isMalicious()'s catch must be broad enough to
+        // fall back on that too, not escape and break the publish request outright.
+        when(extensionControl.getMaliciousExtensionIds())
+                .thenThrow(new RuntimeException("Redis connection refused"));
+        when(extensionControl.getLastKnownMaliciousExtensionIds())
+                .thenReturn(List.of(NamingUtil.toExtensionId("publisher", "demo")));
+
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            mockExtensionVersion("publisher", "demo", "2.0.0", null, processor);
+
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+            var liu = new LoggedInAuthentication(user);
+
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
+            when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
+
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("known malicious extension");
+        }
+    }
+
+    @Test
+    void shouldRecordTheTokenTypeUsedToPublish() throws IOException {
+        // The trusted-publisher badge (ExtensionVersion#toExtensionVersionJson) is driven off
+        // publishedWithTt, so it must actually be set from whatever token type authenticated the
+        // publish request, not silently dropped.
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            var metadata = mockExtensionVersion("publisher", "demo", "2.0.0", null, processor);
+
+            when(processor.getExtensionDependencies()).thenReturn(List.of());
+            when(processor.getBundledExtensions()).thenReturn(List.of());
+            when(processor.getPackageMetadata()).thenReturn(
+                    new ExtensionProcessor.PackageMetadata(
+                            "publisher",
+                            "demo",
+                            "2.0.0",
+                            "Demo OK"));
+
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+            var ata = new AccessTokenAuthentication(user, PersonalAccessTokenType.TPT, 1L, null);
+
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
+            when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
+            when(validator.validateMetadata(metadata)).thenReturn(List.of());
+            when(repositories.findExtensionForUpdate("demo", "publisher")).thenReturn(null);
+
+            var result = handler.createExtensionVersion(processor, ata, LocalDateTime.now(), false);
+
+            assertThat(result.getPublishedWithTt()).isEqualTo(PersonalAccessTokenType.TPT);
+            // A one-time token is deleted as it is used, before this row is written, so referencing it
+            // makes the insert fail on extension_version_published_with_id_fkey. The publish is
+            // identified by the workflow claims in published_provenance instead.
+            assertThat(result.getPublishedWithId()).isNull();
+        }
+    }
+
+    // A long-lived token is only ever deactivated, never deleted, so the reference is safe to record and
+    // is what answers "what did this credential publish" after it leaks.
+    @Test
+    void recordsTheTokenALongLivedPublishUsed() throws IOException {
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            var metadata = mockExtensionVersion("publisher", "demo", "2.0.0", null, processor);
+
+            when(processor.getExtensionDependencies()).thenReturn(List.of());
+            when(processor.getBundledExtensions()).thenReturn(List.of());
+            when(processor.getPackageMetadata()).thenReturn(
+                    new ExtensionProcessor.PackageMetadata(
+                            "publisher",
+                            "demo",
+                            "2.0.0",
+                            "Demo OK"));
+
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+            var ata = new AccessTokenAuthentication(user, PersonalAccessTokenType.LLT, 42L, null);
+
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
+            when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
+            when(validator.validateMetadata(metadata)).thenReturn(List.of());
+            when(repositories.findExtensionForUpdate("demo", "publisher")).thenReturn(null);
+
+            var result = handler.createExtensionVersion(processor, ata, LocalDateTime.now(), false);
+
+            assertThat(result.getPublishedWithId()).isEqualTo(42L);
+        }
+    }
+
+    @Test
+    void shouldFailWhenFileResourceCollidesWithDerivedDownloadName() throws IOException {
+        // TOB-OVSX-15: object keys for a version share one flat namespace, so a README (or any other
+        // asset) declared under the binary's derived name would silently overwrite it in storage once
+        // uploaded. That resource name is attacker-controlled (it comes from the VSIX manifest), so
+        // publication of a colliding package must be rejected before anything is stored.
+        try (
+                var processor = org.mockito.Mockito.mock(ExtensionProcessor.class);
+                var readme = new TempFile("readme_", ".md")
+        ) {
+            var metadata = mockExtensionVersion("publisher", "demo", "2.0.0", null, processor);
+
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+            var liu = new LoggedInAuthentication(user);
+
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
+            when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
+            when(repositories.findExtensionForUpdate("demo", "publisher")).thenReturn(null);
+            when(processor.getPackageMetadata()).thenReturn(
+                    new ExtensionProcessor.PackageMetadata("publisher", "demo", "2.0.0", "Demo OK"));
+
+            // Matches what createExtensionVersion will derive for the download once extVersion is wired
+            // up with its extension/namespace, which happens after this point in the real flow.
+            var maliciousName = NamingUtil.toFileFormat("publisher", "demo", "any", "2.0.0", ".vsix");
+            var readmeResource = new FileResource();
+            readmeResource.setName(maliciousName);
+            readme.setResource(readmeResource);
+
+            doAnswer(invocation -> {
+                Consumer<TempFile> consumer = invocation.getArgument(1);
+                consumer.accept(readme);
+                return null;
+            }).when(processor).getFileResources(any(), any());
+
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining(maliciousName);
+
+            // the version must not be persisted once its file resources are rejected
+            org.mockito.Mockito.verify(entityManager, never()).persist(metadata);
+        }
+    }
+
+    @Test
+    void shouldFailWhenTwoFileResourcesHaveTheSameName() throws IOException {
+        try (
+                var processor = org.mockito.Mockito.mock(ExtensionProcessor.class);
+                var changelog = new TempFile("changelog_", ".md");
+                var license = new TempFile("license_", ".md")
+        ) {
+            var metadata = mockExtensionVersion("publisher", "demo", "2.0.0", null, processor);
+
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+            var liu = new LoggedInAuthentication(user);
+
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
+            when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
+            when(repositories.findExtensionForUpdate("demo", "publisher")).thenReturn(null);
+            when(processor.getPackageMetadata()).thenReturn(
+                    new ExtensionProcessor.PackageMetadata("publisher", "demo", "2.0.0", "Demo OK"));
+
+            var changelogResource = new FileResource();
+            changelogResource.setName("CHANGELOG.md");
+            changelog.setResource(changelogResource);
+
+            // The license is repointed at the same file as the changelog, so both resolve to the same
+            // name under different resource types.
+            var licenseResource = new FileResource();
+            licenseResource.setName("CHANGELOG.md");
+            license.setResource(licenseResource);
+
+            doAnswer(invocation -> {
+                Consumer<TempFile> consumer = invocation.getArgument(1);
+                consumer.accept(changelog);
+                consumer.accept(license);
+                return null;
+            }).when(processor).getFileResources(any(), any());
+
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("CHANGELOG.md");
+        }
+    }
+
+    @Test
+    void shouldReportAllFileResourceCollisionsAtOnce() throws IOException {
+        // Reports every colliding name in one error instead of failing on the first, so a publisher
+        // does not have to republish repeatedly just to discover the next collision.
+        try (
+                var processor = org.mockito.Mockito.mock(ExtensionProcessor.class);
+                var readme = new TempFile("readme_", ".md");
+                var changelog = new TempFile("changelog_", ".md");
+                var license = new TempFile("license_", ".md")
+        ) {
+            mockExtensionVersion("publisher", "demo", "2.0.0", null, processor);
+
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+            var liu = new LoggedInAuthentication(user);
+
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
+            when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
+            when(repositories.findExtensionForUpdate("demo", "publisher")).thenReturn(null);
+            when(processor.getPackageMetadata()).thenReturn(
+                    new ExtensionProcessor.PackageMetadata("publisher", "demo", "2.0.0", "Demo OK"));
+
+            var maliciousName = NamingUtil.toFileFormat("publisher", "demo", "any", "2.0.0", ".vsix");
+            var readmeResource = new FileResource();
+            readmeResource.setName(maliciousName);
+            readme.setResource(readmeResource);
+
+            var changelogResource = new FileResource();
+            changelogResource.setName("CHANGELOG.md");
+            changelog.setResource(changelogResource);
+
+            // A second, independent collision alongside the readme/binary one above.
+            var licenseResource = new FileResource();
+            licenseResource.setName("CHANGELOG.md");
+            license.setResource(licenseResource);
+
+            doAnswer(invocation -> {
+                Consumer<TempFile> consumer = invocation.getArgument(1);
+                consumer.accept(readme);
+                consumer.accept(changelog);
+                consumer.accept(license);
+                return null;
+            }).when(processor).getFileResources(any(), any());
+
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("Multiple file name collisions")
+                    .hasMessageContaining(maliciousName)
+                    .hasMessageContaining("CHANGELOG.md");
         }
     }
 
@@ -147,12 +425,11 @@ class PublishExtensionVersionHandlerTest {
             when(processor.getNamespace()).thenReturn("unknown");
 
             var user = new UserData();
-            var token = new PersonalAccessToken();
-            token.setUser(user);
+            var liu = new LoggedInAuthentication(user);
 
             when(repositories.findNamespace("unknown")).thenReturn(null);
 
-            assertThatThrownBy(() -> handler.createExtensionVersion(processor, token, LocalDateTime.now(), false))
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
                     .isInstanceOf(ErrorResultException.class)
                     .hasMessageContaining("Unknown publisher");
         }
@@ -168,21 +445,18 @@ class PublishExtensionVersionHandlerTest {
                             "publisher",
                             "demo",
                             "2.0.0",
-                            "Demo OK"
-                    )
-            );
+                            "Demo OK"));
 
             var namespace = buildNamespace("publisher");
             var user = new UserData();
-            var token = new PersonalAccessToken();
-            token.setUser(user);
+            var liu = new LoggedInAuthentication(user);
 
             when(repositories.findNamespace("publisher")).thenReturn(namespace);
             when(users.hasPublishPermission(user, namespace)).thenReturn(true);
             when(validator.validateExtensionVersion("2.0.0")).thenReturn(Optional.empty());
             when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> handler.createExtensionVersion(processor, token, LocalDateTime.now(), false))
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
                     .isInstanceOf(ErrorResultException.class)
                     .hasMessageContaining("uses an unsupported icon format");
         }
@@ -201,21 +475,18 @@ class PublishExtensionVersionHandlerTest {
                             "publisher",
                             "demo",
                             "2.0.0",
-                            "Demo OK"
-                    )
-            );
+                            "Demo OK"));
 
             var namespace = buildNamespace("publisher");
             var user = new UserData();
-            var token = new PersonalAccessToken();
-            token.setUser(user);
+            var liu = new LoggedInAuthentication(user);
 
             when(repositories.findNamespace("publisher")).thenReturn(namespace);
             when(users.hasPublishPermission(user, namespace)).thenReturn(true);
             when(validator.validateExtensionVersion(metadata.getVersion())).thenReturn(Optional.empty());
             when(validator.validateExtensionName("demo")).thenReturn(Optional.empty());
 
-            var ev = handler.createExtensionVersion(processor, token, LocalDateTime.now(), false);
+            var ev = handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false);
             assertThat(ev).isNotNull();
         } finally {
             config.setUnsupportedIconFormats(previousUnsupportedIconFormats);
@@ -229,8 +500,7 @@ class PublishExtensionVersionHandlerTest {
 
             var namespace = buildNamespace("publisher");
             var user = new UserData();
-            var token = new PersonalAccessToken();
-            token.setUser(user);
+            var liu = new LoggedInAuthentication(user);
 
             when(repositories.findNamespace("publisher")).thenReturn(namespace);
             when(users.hasPublishPermission(user, namespace)).thenReturn(true);
@@ -242,11 +512,9 @@ class PublishExtensionVersionHandlerTest {
                             "publisher1",
                             "demo",
                             "2.0.0",
-                            "Demo OK"
-                    )
-            );
+                            "Demo OK"));
 
-            assertThatThrownBy(() -> handler.createExtensionVersion(processor, token, LocalDateTime.now(), false))
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
                     .isInstanceOf(ErrorResultException.class)
                     .hasMessageContaining("Publisher in extension.vsixmanifest");
 
@@ -255,11 +523,9 @@ class PublishExtensionVersionHandlerTest {
                             "publisher",
                             "DemO1",
                             "2.0.0",
-                            "Demo OK"
-                    )
-            );
+                            "Demo OK"));
 
-            assertThatThrownBy(() -> handler.createExtensionVersion(processor, token, LocalDateTime.now(), false))
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
                     .isInstanceOf(ErrorResultException.class)
                     .hasMessageContaining("Extension name in extension.vsixmanifest");
 
@@ -268,17 +534,126 @@ class PublishExtensionVersionHandlerTest {
                             "publisher",
                             "demo",
                             "9.9.9",
-                            "Demo OK"
-                    )
-            );
+                            "Demo OK"));
 
-            assertThatThrownBy(() -> handler.createExtensionVersion(processor, token, LocalDateTime.now(), false))
+            assertThatThrownBy(() -> handler.createExtensionVersion(processor, liu, LocalDateTime.now(), false))
                     .isInstanceOf(ErrorResultException.class)
                     .hasMessageContaining("Extension version in extension.vsixmanifest");
         }
     }
 
-    private ExtensionVersion mockExtensionVersion(String namespace, String name, String version, String iconPath, ExtensionProcessor processor) throws IOException {
+    @Test
+    void shouldPassPreconditionsForUnpublishedVersion() {
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+
+            when(processor.getNamespace()).thenReturn("publisher");
+            when(processor.getExtensionName()).thenReturn("demo");
+            when(processor.getVersion()).thenReturn("2.0.0");
+            when(processor.getTargetPlatform()).thenReturn(TargetPlatform.NAME_UNIVERSAL);
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(repositories.findVersion("2.0.0", TargetPlatform.NAME_UNIVERSAL, "demo", "publisher"))
+                    .thenReturn(null);
+
+            assertThatCode(() -> handler.checkPublishPreconditions(processor, user)).doesNotThrowAnyException();
+        }
+    }
+
+    @Test
+    void shouldFailPreconditionsWithoutPublishPermission() {
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+
+            when(processor.getNamespace()).thenReturn("publisher");
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(false);
+
+            assertThatThrownBy(() -> handler.checkPublishPreconditions(processor, user))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("Insufficient access rights for publisher: publisher");
+
+            // the package is not inspected any further once the access rights are missing
+            verify(repositories, never()).findVersion(anyString(), anyString(), anyString(), anyString());
+        }
+    }
+
+    @Test
+    void shouldFailPreconditionsWithUnknownNamespace() {
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            var user = new UserData();
+
+            when(processor.getNamespace()).thenReturn("unknown");
+            when(repositories.findNamespace("unknown")).thenReturn(null);
+
+            assertThatThrownBy(() -> handler.checkPublishPreconditions(processor, user))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("Unknown publisher: unknown");
+        }
+    }
+
+    @Test
+    void shouldFailPreconditionsForAlreadyPublishedVersion() {
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+
+            var existing = new ExtensionVersion();
+            existing.setVersion("2.0.0");
+            existing.setTargetPlatform(TargetPlatform.NAME_UNIVERSAL);
+            existing.setActive(true);
+
+            when(processor.getNamespace()).thenReturn("publisher");
+            when(processor.getExtensionName()).thenReturn("demo");
+            when(processor.getVersion()).thenReturn("2.0.0");
+            when(processor.getTargetPlatform()).thenReturn(TargetPlatform.NAME_UNIVERSAL);
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(repositories.findVersion("2.0.0", TargetPlatform.NAME_UNIVERSAL, "demo", "publisher"))
+                    .thenReturn(existing);
+
+            assertThatThrownBy(() -> handler.checkPublishPreconditions(processor, user))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("is already published.");
+        }
+    }
+
+    @Test
+    void shouldFailPreconditionsForRemovedVersion() {
+        try (var processor = org.mockito.Mockito.mock(ExtensionProcessor.class)) {
+            var namespace = buildNamespace("publisher");
+            var user = new UserData();
+
+            var tombstone = new ExtensionVersion();
+            tombstone.setVersion("2.0.0");
+            tombstone.setTargetPlatform(TargetPlatform.NAME_UNIVERSAL);
+            tombstone.setActive(false);
+            tombstone.setRemoved(true);
+
+            when(processor.getNamespace()).thenReturn("publisher");
+            when(processor.getExtensionName()).thenReturn("demo");
+            when(processor.getVersion()).thenReturn("2.0.0");
+            when(processor.getTargetPlatform()).thenReturn(TargetPlatform.NAME_UNIVERSAL);
+            when(repositories.findNamespace("publisher")).thenReturn(namespace);
+            when(users.hasPublishPermission(user, namespace)).thenReturn(true);
+            when(repositories.findVersion("2.0.0", TargetPlatform.NAME_UNIVERSAL, "demo", "publisher"))
+                    .thenReturn(tombstone);
+
+            assertThatThrownBy(() -> handler.checkPublishPreconditions(processor, user))
+                    .isInstanceOf(ErrorResultException.class)
+                    .hasMessageContaining("stays permanently reserved");
+        }
+    }
+
+    private ExtensionVersion mockExtensionVersion(
+            String namespace,
+            String name,
+            String version,
+            String iconPath,
+            ExtensionProcessor processor
+    ) throws IOException {
         when(processor.getNamespace()).thenReturn(namespace);
         when(processor.getExtensionName()).thenReturn(name);
         when(processor.getVersion()).thenReturn(version);
@@ -290,7 +665,7 @@ class PublishExtensionVersionHandlerTest {
         ev.setDisplayName("Demo OK");
         ev.setVersion("2.0.0");
         ev.setTargetPlatform("any");
-        when(processor.getMetadata()).thenReturn(ev);
+        when(processor.getMetadata(anyInt(), anyInt())).thenReturn(ev);
 
         return ev;
     }

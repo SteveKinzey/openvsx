@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,24 +6,11 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import org.apache.commons.codec.digest.DigestUtils;
-import org.eclipse.openvsx.entities.FileDecision;
-import org.eclipse.openvsx.repositories.FileDecisionRepository;
-import org.eclipse.openvsx.util.ArchiveUtil;
-import org.eclipse.openvsx.util.TempFile;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.core.annotation.Order;
-import org.springframework.core.task.AsyncTaskExecutor;
-import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -33,6 +20,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipException;
 import java.util.zip.ZipFile;
+
+import org.apache.commons.codec.digest.DigestUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.core.annotation.Order;
+import org.springframework.core.task.AsyncTaskExecutor;
+import org.springframework.stereotype.Service;
+
+import org.eclipse.openvsx.entities.FileDecision;
+import org.eclipse.openvsx.repositories.FileDecisionRepository;
+import org.eclipse.openvsx.util.ArchiveUtil;
+import org.eclipse.openvsx.util.TempFile;
 
 /**
  * Service for checking extension files against the blocklist during publishing.
@@ -45,7 +46,7 @@ import java.util.zip.ZipFile;
  * Only loaded when blocklist checking is enabled via configuration.
  */
 @Service
-@Order(2)  // Run second: blocklist check
+@Order(2) // Run second: blocklist check
 @ConditionalOnProperty(name = "ovsx.scanning.blocklist-check.enabled", havingValue = "true")
 public class BlocklistCheckService implements PublishCheck {
 
@@ -102,7 +103,8 @@ public class BlocklistCheckService implements PublishCheck {
             return Result.pass();
         }
 
-        logger.warn("Blocklist check found {} blocked file(s) in extension {}.{} v{}",
+        logger.warn(
+                "Blocklist check found {} blocked file(s) in extension {}.{} v{}",
                 blockedFiles.size(),
                 context.scan().getNamespaceName(),
                 context.scan().getExtensionName(),
@@ -115,10 +117,10 @@ public class BlocklistCheckService implements PublishCheck {
                     logger.warn("  - Blocked file: '{}' (hash: {})", bf.fileName(), bf.fileHash());
                     return new Failure(
                             "BLOCKED_FILE",
-                            String.format("File '%s' (hash: %s)",
+                            String.format(
+                                    "File '%s' (hash: %s)",
                                     bf.fileName(),
-                                    bf.fileHash())
-                    );
+                                    bf.fileHash()));
                 })
                 .toList();
 
@@ -134,20 +136,18 @@ public class BlocklistCheckService implements PublishCheck {
 
         try (ZipFile zipFile = new ZipFile(extensionFile.getPath().toFile())) {
             List<? extends ZipEntry> entries = Collections.list(zipFile.entries());
-            
+
             ArchiveUtil.enforceArchiveLimits(
                     entries,
                     scanConfig.getMaxEntryCount(),
-                    scanConfig.getMaxArchiveSizeBytes()
-            );
+                    scanConfig.getMaxArchiveSizeBytes());
 
             var hashableEntries = entries.stream()
                     .filter(entry -> !entry.isDirectory())
-                    .filter(entry -> ArchiveUtil.isSafePath(entry.getName()))
                     .toList();
 
             List<CompletableFuture<Void>> futures = new ArrayList<>(hashableEntries.size());
-            
+
             for (ZipEntry entry : hashableEntries) {
                 CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                     try {
@@ -163,8 +163,10 @@ public class BlocklistCheckService implements PublishCheck {
             // Wait for all hashing to complete (non-blocking wait)
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
 
-            logger.debug("Blocklist check: hashed {} files, skipped {}", 
-                    fileHashes.size(), entries.size() - hashableEntries.size());
+            logger.debug(
+                    "Blocklist check: hashed {} files, skipped {}",
+                    fileHashes.size(),
+                    entries.size() - hashableEntries.size());
 
         } catch (ZipException e) {
             logger.error("Failed to open extension file as zip: {}", e.getMessage());
@@ -179,8 +181,7 @@ public class BlocklistCheckService implements PublishCheck {
         }
 
         List<FileDecision> blockedDecisions = fileDecisionRepository.findBlockedByFileHashIn(
-                fileHashes.keySet()
-        );
+                fileHashes.keySet());
 
         if (blockedDecisions.isEmpty()) {
             logger.debug("No blocked files found in extension");
@@ -192,7 +193,7 @@ public class BlocklistCheckService implements PublishCheck {
             String hash = decision.getFileHash();
             String fileName = fileHashes.get(hash);
             result.add(new BlockedFileInfo(fileName, hash, decision));
-            
+
             logger.info("Blocked file detected: {} (hash: {})", fileName, hash);
         }
 

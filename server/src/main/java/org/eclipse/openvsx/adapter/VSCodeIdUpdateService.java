@@ -1,26 +1,30 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2023 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.adapter;
 
+import java.util.*;
+import java.util.stream.Collectors;
+
 import org.apache.commons.lang3.StringUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.stereotype.Service;
+
 import org.eclipse.openvsx.entities.Extension;
 import org.eclipse.openvsx.entities.Namespace;
 import org.eclipse.openvsx.repositories.RepositoryService;
 import org.eclipse.openvsx.util.BuiltInExtensionUtil;
 import org.eclipse.openvsx.util.NamingUtil;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.stereotype.Service;
-
-import java.util.*;
-import java.util.stream.Collectors;
 
 @Service
 public class VSCodeIdUpdateService {
@@ -44,6 +48,13 @@ public class VSCodeIdUpdateService {
         }
 
         var extension = repositories.findPublicId(namespaceName, extensionName);
+        if (extension == null) {
+            logger.warn(
+                    "failed to update VSCodeId for extension {}: does not exist",
+                    NamingUtil.toExtensionId(namespaceName, extensionName));
+            return;
+        }
+
         var extensionUpdates = new HashMap<Long, String>();
         updateExtensionPublicId(extension, extensionUpdates, false);
         if (!extensionUpdates.isEmpty()) {
@@ -91,14 +102,14 @@ public class VSCodeIdUpdateService {
             do {
                 newPublicId = service.getRandomPublicId();
                 logger.debug("RANDOM NAMESPACE PUBLIC ID: {}", newPublicId);
-            } while(updates.containsValue(newPublicId) || repositories.namespacePublicIdExists(newPublicId));
+            } while (updates.containsValue(newPublicId) || repositories.namespacePublicIdExists(newPublicId));
             logger.debug("RANDOM PUT UPDATE: {} - {}", id, newPublicId);
             updates.put(id, newPublicId);
         } else if (!newPublicId.equals(oldPublicId)) {
             logger.debug("UPSTREAM PUT UPDATE: {} - {}", id, newPublicId);
             updates.put(id, newPublicId);
             var duplicatePublicId = repositories.findNamespacePublicId(newPublicId);
-            if(duplicatePublicId != null) {
+            if (duplicatePublicId != null) {
                 updateNamespacePublicId(duplicatePublicId, updates, true);
             }
         }
@@ -117,8 +128,8 @@ public class VSCodeIdUpdateService {
 
         var upstreamExtensionPublicIds = new HashMap<Long, String>();
         var upstreamNamespacePublicIds = new HashMap<Long, String>();
-        for(var extension : extensions) {
-            if(BuiltInExtensionUtil.isBuiltIn(extension)) {
+        for (var extension : extensions) {
+            if (BuiltInExtensionUtil.isBuiltIn(extension)) {
                 logger.atTrace()
                         .setMessage("SKIP BUILT-IN EXTENSION {}")
                         .addArgument(() -> NamingUtil.toExtensionId(extension))
@@ -169,7 +180,10 @@ public class VSCodeIdUpdateService {
         }
     }
 
-    private Map<Long, String> getChangedPublicIds(Map<Long, String> upstreamPublicIds, Map<Long, String> currentPublicIds) {
+    private Map<Long, String> getChangedPublicIds(
+            Map<Long, String> upstreamPublicIds,
+            Map<Long, String> currentPublicIds
+    ) {
         var changedPublicIds = new HashMap<Long, String>();
         upstreamPublicIds.entrySet().stream()
                 .filter(e -> !Objects.equals(currentPublicIds.get(e.getKey()), e.getValue()))
@@ -183,7 +197,11 @@ public class VSCodeIdUpdateService {
         return changedPublicIds;
     }
 
-    private void updatePublicIdNulls(Map<Long, String> changedPublicIds, Set<String> newPublicIds, Map<Long, String> publicIdMap) {
+    private void updatePublicIdNulls(
+            Map<Long, String> changedPublicIds,
+            Set<String> newPublicIds,
+            Map<Long, String> publicIdMap
+    ) {
         // remove unchanged random public ids
         changedPublicIds.entrySet().removeIf(e -> {
             var publicId = e.getValue() == null ? publicIdMap.get(e.getKey()) : null;
@@ -197,7 +215,7 @@ public class VSCodeIdUpdateService {
 
         // put random public ids where upstream public id is missing
         for (var entry : changedPublicIds.entrySet()) {
-            if(entry.getValue() != null) {
+            if (entry.getValue() != null) {
                 continue;
             }
 

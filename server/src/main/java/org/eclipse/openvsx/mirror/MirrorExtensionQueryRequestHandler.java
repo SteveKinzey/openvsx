@@ -1,23 +1,27 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.mirror;
 
-import org.eclipse.openvsx.adapter.*;
-import org.eclipse.openvsx.util.NotFoundException;
+import java.util.stream.Collectors;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ResponseStatusException;
 
-import java.util.stream.Collectors;
+import org.eclipse.openvsx.adapter.*;
+import org.eclipse.openvsx.util.NotFoundException;
 
 @Component
 @ConditionalOnProperty(value = "ovsx.data.mirror.enabled", havingValue = "true")
@@ -49,9 +53,10 @@ public class MirrorExtensionQueryRequestHandler implements IExtensionQueryReques
                 if (!dataMirror.needsMatch()) {
                     return result;
                 }
-                return local.toQueryResult(result.results().get(0).extensions().stream().filter(e ->
-                        dataMirror.match(e.publisher().publisherName(), e.extensionName())
-                ).collect(Collectors.toList()));
+                return local.toQueryResult(
+                        result.results().getFirst().extensions().stream()
+                                .filter(e -> dataMirror.match(e.publisher().publisherName(), e.extensionName()))
+                                .collect(Collectors.toList()));
             } catch (NotFoundException | ResponseStatusException exc) {
                 // expected issues with upstream, try local
             } catch (Exception e) {

@@ -1,24 +1,28 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2021 Precies. Software and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.repositories;
 
-import org.eclipse.openvsx.entities.Namespace;
-import org.eclipse.openvsx.entities.NamespaceMembership;
-import org.eclipse.openvsx.entities.UserData;
+import java.util.Collection;
+import java.util.List;
+
 import org.jooq.DSLContext;
 import org.jooq.Record;
 import org.jooq.SelectQuery;
 import org.springframework.stereotype.Component;
 
-import java.util.Collection;
-import java.util.List;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.entities.NamespaceMembership;
+import org.eclipse.openvsx.entities.UserData;
 
 import static org.eclipse.openvsx.jooq.Tables.*;
 
@@ -33,11 +37,10 @@ public class NamespaceMembershipJooqRepository {
 
     public List<NamespaceMembership> findAllByNamespaceId(Collection<Long> namespaceIds) {
         return dsl.select(
-                    NAMESPACE_MEMBERSHIP.ID,
-                    NAMESPACE_MEMBERSHIP.ROLE,
-                    NAMESPACE_MEMBERSHIP.NAMESPACE,
-                    NAMESPACE_MEMBERSHIP.USER_DATA
-                )
+                NAMESPACE_MEMBERSHIP.ID,
+                NAMESPACE_MEMBERSHIP.ROLE,
+                NAMESPACE_MEMBERSHIP.NAMESPACE,
+                NAMESPACE_MEMBERSHIP.USER_DATA)
                 .from(NAMESPACE_MEMBERSHIP)
                 .where(NAMESPACE_MEMBERSHIP.NAMESPACE.in(namespaceIds))
                 .fetch(row -> {
@@ -72,9 +75,10 @@ public class NamespaceMembershipJooqRepository {
     }
 
     public boolean hasRole(Namespace namespace, String role) {
-        return dsl.fetchExists(dsl.selectOne().from(NAMESPACE_MEMBERSHIP)
-                .where(NAMESPACE_MEMBERSHIP.NAMESPACE.eq(namespace.getId()))
-                .and(NAMESPACE_MEMBERSHIP.ROLE.equalIgnoreCase(role)));
+        return dsl.fetchExists(
+                dsl.selectOne().from(NAMESPACE_MEMBERSHIP)
+                        .where(NAMESPACE_MEMBERSHIP.NAMESPACE.eq(namespace.getId()))
+                        .and(NAMESPACE_MEMBERSHIP.ROLE.equalIgnoreCase(role)));
     }
 
     public boolean isOwner(UserData user, Namespace namespace) {
@@ -83,8 +87,7 @@ public class NamespaceMembershipJooqRepository {
                         .from(NAMESPACE_MEMBERSHIP)
                         .where(NAMESPACE_MEMBERSHIP.NAMESPACE.eq(namespace.getId()))
                         .and(NAMESPACE_MEMBERSHIP.USER_DATA.eq(user.getId()))
-                        .and(NAMESPACE_MEMBERSHIP.ROLE.eq(NamespaceMembership.ROLE_OWNER))
-        );
+                        .and(NAMESPACE_MEMBERSHIP.ROLE.eq(NamespaceMembership.ROLE_OWNER)));
     }
 
     public List<NamespaceMembership> findByNamespaceName(String namespaceName) {
@@ -118,8 +121,7 @@ public class NamespaceMembershipJooqRepository {
                 USER_DATA.FULL_NAME,
                 USER_DATA.AVATAR_URL,
                 USER_DATA.PROVIDER_URL,
-                USER_DATA.PROVIDER
-        );
+                USER_DATA.PROVIDER);
         query.addFrom(NAMESPACE_MEMBERSHIP);
         query.addJoin(NAMESPACE, NAMESPACE.ID.eq(NAMESPACE_MEMBERSHIP.NAMESPACE));
         query.addJoin(USER_DATA, USER_DATA.ID.eq(NAMESPACE_MEMBERSHIP.USER_DATA));
@@ -154,10 +156,11 @@ public class NamespaceMembershipJooqRepository {
                         .from(NAMESPACE_MEMBERSHIP)
                         .where(NAMESPACE_MEMBERSHIP.NAMESPACE.eq(namespace.getId()))
                         .and(NAMESPACE_MEMBERSHIP.USER_DATA.eq(user.getId()))
-                        .and(NAMESPACE_MEMBERSHIP.ROLE.equalIgnoreCase(NamespaceMembership.ROLE_CONTRIBUTOR)
-                                .or(NAMESPACE_MEMBERSHIP.ROLE.equalIgnoreCase(NamespaceMembership.ROLE_OWNER))
-                        )
-        );
+                        .and(
+                                NAMESPACE_MEMBERSHIP.ROLE.equalIgnoreCase(NamespaceMembership.ROLE_CONTRIBUTOR)
+                                        .or(
+                                                NAMESPACE_MEMBERSHIP.ROLE
+                                                        .equalIgnoreCase(NamespaceMembership.ROLE_OWNER))));
     }
 
     public boolean hasMembership(UserData user, Namespace namespace) {
@@ -165,7 +168,6 @@ public class NamespaceMembershipJooqRepository {
                 dsl.selectOne()
                         .from(NAMESPACE_MEMBERSHIP)
                         .where(NAMESPACE_MEMBERSHIP.NAMESPACE.eq(namespace.getId()))
-                        .and(NAMESPACE_MEMBERSHIP.USER_DATA.eq(user.getId()))
-        );
+                        .and(NAMESPACE_MEMBERSHIP.USER_DATA.eq(user.getId())));
     }
 }

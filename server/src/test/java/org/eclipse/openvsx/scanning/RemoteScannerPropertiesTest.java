@@ -1,4 +1,4 @@
-/********************************************************************************
+/******************************************************************************
  * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
  * See the NOTICE file(s) distributed with this work for additional
@@ -6,16 +6,16 @@
  *
  * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- ********************************************************************************/
+ *****************************************************************************/
 package org.eclipse.openvsx.scanning;
-
-import org.junit.jupiter.api.Test;
 
 import java.util.HashMap;
 import java.util.Map;
+
+import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -145,6 +145,7 @@ class RemoteScannerPropertiesTest {
         response.setErrorPath("$.error");
         response.setErrorCondition("$.status == 'error'");
         response.setSummaryPath("$.verdictData.summary");
+        response.setMaliciousVerdictPath("$.verdictData.isMalicious");
 
         assertEquals("xml", response.getFormat());
         assertEquals("$.scan.id", response.getJobIdPath());
@@ -154,6 +155,7 @@ class RemoteScannerPropertiesTest {
         assertEquals("$.error", response.getErrorPath());
         assertEquals("$.status == 'error'", response.getErrorCondition());
         assertEquals("$.verdictData.summary", response.getSummaryPath());
+        assertEquals("$.verdictData.isMalicious", response.getMaliciousVerdictPath());
     }
 
     // === ThreatMapping tests ===

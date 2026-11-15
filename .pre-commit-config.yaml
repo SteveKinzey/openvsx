@@ -1,11 +1,12 @@
+exclude: '^((cli|webui)/.yarn|server/src/main/resources/db/migration)'
 repos:
-#- repo: https://github.com/pre-commit/pre-commit-hooks
-#  rev: v6.0.0
-#  hooks:
+- repo: https://github.com/pre-commit/pre-commit-hooks
+  rev: v6.0.0
+  hooks:
 #    - id: check-yaml
-#    - id: end-of-file-fixer
-#    - id: mixed-line-ending
-#    - id: trailing-whitespace
+    - id: end-of-file-fixer
+    - id: mixed-line-ending
+    - id: trailing-whitespace
 #- repo: https://github.com/Lucas-C/pre-commit-hooks
 #  rev: v1.5.5
 #  hooks:
@@ -23,7 +24,36 @@ repos:
   hooks:
   -   id: shellcheck
 - repo: https://github.com/woodruffw/zizmor-pre-commit
-  rev: v1.20.0
+  rev: v1.26.1
   hooks:
     - id: zizmor
       args: [ --min-severity, low ]
+- repo: local
+  hooks:
+    - id: lint
+      name: webui -> eslint & prettier
+      entry: bash -c 'cd webui && yarn lint' --
+      language: system
+      require_serial: true
+      files: ^webui/
+      types: [file]
+    - id: server-format
+      name: server -> jbang format (import order, braces, eclipse formatter)
+      entry: server/scripts/format.sh
+      language: system
+      require_serial: true
+      files: ^server/src/(main|test)/java/.*\.java$
+    - id: config-properties-check
+      name: server -> configuration properties documented in doc/configuration.md
+      entry: server/scripts/config-properties-check.sh
+      language: system
+      require_serial: true
+      pass_filenames: false
+      files: ^(server/src/main/java/.*\.java|server/scripts/(config-properties-check\.sh|config-properties-baseline\.txt|src/ConfigPropertiesReport\.java)|doc/configuration\.md)$
+    - id: formatter-version-check
+      name: server -> formatter dependency versions (jdt.core, spotless-lib)
+      entry: server/scripts/formatter-version-check.sh
+      language: system
+      require_serial: true
+      pass_filenames: false
+      files: ^server/(build\.gradle|buildSrc/build\.gradle|gradle/libs\.versions\.toml|scripts/format\.sh|scripts/src/.*\.java)$

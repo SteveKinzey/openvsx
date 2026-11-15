@@ -1,16 +1,20 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2023 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.util;
 
 import org.apache.commons.lang3.StringUtils;
 import org.apache.tika.mime.MimeType;
+
 import org.eclipse.openvsx.adapter.ExtensionQueryResult;
 import org.eclipse.openvsx.entities.Extension;
 import org.eclipse.openvsx.entities.ExtensionVersion;
@@ -20,7 +24,8 @@ import org.eclipse.openvsx.search.ExtensionSearch;
 
 public class NamingUtil {
 
-    private NamingUtil() {}
+    private NamingUtil() {
+    }
 
     public static String toFileFormat(ExtensionVersion extVersion, String suffix) {
         return toFileFormat(extVersion) + suffix;
@@ -29,14 +34,24 @@ public class NamingUtil {
     public static String toFileFormat(ExtensionVersion extVersion) {
         var extension = extVersion.getExtension();
         var namespace = extension.getNamespace();
-        return toFileFormat(namespace.getName(), extension.getName(), extVersion.getTargetPlatform(), extVersion.getVersion());
+        return toFileFormat(
+                namespace.getName(),
+                extension.getName(),
+                extVersion.getTargetPlatform(),
+                extVersion.getVersion());
     }
 
     public static String toFileFormat(String namespace, String extension, String version) {
         return toExtensionId(namespace, extension) + "-" + version;
     }
 
-    public static String toFileFormat(String namespace, String extension, String targetPlatform, String version, String suffix) {
+    public static String toFileFormat(
+            String namespace,
+            String extension,
+            String targetPlatform,
+            String version,
+            String suffix
+    ) {
         return toFileFormat(namespace, extension, targetPlatform, version) + suffix;
     }
 
@@ -52,7 +67,11 @@ public class NamingUtil {
     public static String toLogFormat(ExtensionVersion extVersion) {
         var extension = extVersion.getExtension();
         var namespace = extension.getNamespace();
-        return toLogFormat(namespace.getName(), extension.getName(), extVersion.getTargetPlatform(), extVersion.getVersion());
+        return toLogFormat(
+                namespace.getName(),
+                extension.getName(),
+                extVersion.getTargetPlatform(),
+                extVersion.getVersion());
     }
 
     public static String toLogFormat(ExtensionJson json) {
@@ -100,10 +119,11 @@ public class NamingUtil {
     }
 
     public static String toLogoName(Namespace namespace, MimeType logoType) {
-        return  "logo-" + namespace.getName() + "-" + System.currentTimeMillis() + logoType.getExtension();
+        return "logo-" + namespace.getName() + "-" + System.currentTimeMillis() + logoType.getExtension();
     }
 
     public static String changeLogoName(Namespace oldNamespace, Namespace newNamespace) {
-        return oldNamespace.getLogoName().replace("-" + oldNamespace.getName() + "-", "-" + newNamespace.getName() + "-");
+        return oldNamespace.getLogoName()
+                .replace("-" + oldNamespace.getName() + "-", "-" + newNamespace.getName() + "-");
     }
 }

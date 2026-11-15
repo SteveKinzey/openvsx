@@ -12,34 +12,33 @@ import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopMostActivePublishingUse
 import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopMostDownloadedExtensions;
 import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopNamespaceExtensionVersions;
 import org.eclipse.openvsx.jooq.tables.AdminStatisticsTopNamespaceExtensions;
-import org.eclipse.openvsx.jooq.tables.Customer;
-import org.eclipse.openvsx.jooq.tables.CustomerMembership;
-import org.eclipse.openvsx.jooq.tables.DailyUsageStats;
-import org.eclipse.openvsx.jooq.tables.DownloadCountProcessedItem;
+import org.eclipse.openvsx.jooq.tables.DownloadIngestion;
 import org.eclipse.openvsx.jooq.tables.Extension;
 import org.eclipse.openvsx.jooq.tables.ExtensionReview;
 import org.eclipse.openvsx.jooq.tables.ExtensionScan;
+import org.eclipse.openvsx.jooq.tables.ExtensionSizeOverride;
 import org.eclipse.openvsx.jooq.tables.ExtensionThreat;
 import org.eclipse.openvsx.jooq.tables.ExtensionValidationFailure;
 import org.eclipse.openvsx.jooq.tables.ExtensionVersion;
+import org.eclipse.openvsx.jooq.tables.ExtensionVersionChange;
 import org.eclipse.openvsx.jooq.tables.FileDecision;
 import org.eclipse.openvsx.jooq.tables.FileResource;
-import org.eclipse.openvsx.jooq.tables.FlywaySchemaHistory;
 import org.eclipse.openvsx.jooq.tables.MigrationItem;
 import org.eclipse.openvsx.jooq.tables.Namespace;
 import org.eclipse.openvsx.jooq.tables.NamespaceMembership;
 import org.eclipse.openvsx.jooq.tables.NamespaceSocialLinks;
 import org.eclipse.openvsx.jooq.tables.PersistedLog;
 import org.eclipse.openvsx.jooq.tables.PersonalAccessToken;
-import org.eclipse.openvsx.jooq.tables.RateLimitToken;
+import org.eclipse.openvsx.jooq.tables.PublisherAgreementEvent;
 import org.eclipse.openvsx.jooq.tables.ScanCheckResult;
 import org.eclipse.openvsx.jooq.tables.ScanJob;
+import org.eclipse.openvsx.jooq.tables.Setting;
 import org.eclipse.openvsx.jooq.tables.SignatureKeyPair;
 import org.eclipse.openvsx.jooq.tables.SpringSession;
 import org.eclipse.openvsx.jooq.tables.SpringSessionAttributes;
-import org.eclipse.openvsx.jooq.tables.Tier;
-import org.eclipse.openvsx.jooq.tables.UsageStats;
+import org.eclipse.openvsx.jooq.tables.TrustedPublisher;
 import org.eclipse.openvsx.jooq.tables.UserData;
+import org.eclipse.openvsx.jooq.tables.UserDataPermission;
 
 
 /**
@@ -93,24 +92,9 @@ public class Tables {
     public static final AdminStatisticsTopNamespaceExtensions ADMIN_STATISTICS_TOP_NAMESPACE_EXTENSIONS = AdminStatisticsTopNamespaceExtensions.ADMIN_STATISTICS_TOP_NAMESPACE_EXTENSIONS;
 
     /**
-     * The table <code>public.customer</code>.
+     * The table <code>public.download_ingestion</code>.
      */
-    public static final Customer CUSTOMER = Customer.CUSTOMER;
-
-    /**
-     * The table <code>public.customer_membership</code>.
-     */
-    public static final CustomerMembership CUSTOMER_MEMBERSHIP = CustomerMembership.CUSTOMER_MEMBERSHIP;
-
-    /**
-     * The table <code>public.daily_usage_stats</code>.
-     */
-    public static final DailyUsageStats DAILY_USAGE_STATS = DailyUsageStats.DAILY_USAGE_STATS;
-
-    /**
-     * The table <code>public.download_count_processed_item</code>.
-     */
-    public static final DownloadCountProcessedItem DOWNLOAD_COUNT_PROCESSED_ITEM = DownloadCountProcessedItem.DOWNLOAD_COUNT_PROCESSED_ITEM;
+    public static final DownloadIngestion DOWNLOAD_INGESTION = DownloadIngestion.DOWNLOAD_INGESTION;
 
     /**
      * The table <code>public.extension</code>.
@@ -128,6 +112,11 @@ public class Tables {
     public static final ExtensionScan EXTENSION_SCAN = ExtensionScan.EXTENSION_SCAN;
 
     /**
+     * The table <code>public.extension_size_override</code>.
+     */
+    public static final ExtensionSizeOverride EXTENSION_SIZE_OVERRIDE = ExtensionSizeOverride.EXTENSION_SIZE_OVERRIDE;
+
+    /**
      * The table <code>public.extension_threat</code>.
      */
     public static final ExtensionThreat EXTENSION_THREAT = ExtensionThreat.EXTENSION_THREAT;
@@ -143,6 +132,11 @@ public class Tables {
     public static final ExtensionVersion EXTENSION_VERSION = ExtensionVersion.EXTENSION_VERSION;
 
     /**
+     * The table <code>public.extension_version_change</code>.
+     */
+    public static final ExtensionVersionChange EXTENSION_VERSION_CHANGE = ExtensionVersionChange.EXTENSION_VERSION_CHANGE;
+
+    /**
      * The table <code>public.file_decision</code>.
      */
     public static final FileDecision FILE_DECISION = FileDecision.FILE_DECISION;
@@ -151,11 +145,6 @@ public class Tables {
      * The table <code>public.file_resource</code>.
      */
     public static final FileResource FILE_RESOURCE = FileResource.FILE_RESOURCE;
-
-    /**
-     * The table <code>public.flyway_schema_history</code>.
-     */
-    public static final FlywaySchemaHistory FLYWAY_SCHEMA_HISTORY = FlywaySchemaHistory.FLYWAY_SCHEMA_HISTORY;
 
     /**
      * The table <code>public.migration_item</code>.
@@ -188,9 +177,9 @@ public class Tables {
     public static final PersonalAccessToken PERSONAL_ACCESS_TOKEN = PersonalAccessToken.PERSONAL_ACCESS_TOKEN;
 
     /**
-     * The table <code>public.rate_limit_token</code>.
+     * The table <code>public.publisher_agreement_event</code>.
      */
-    public static final RateLimitToken RATE_LIMIT_TOKEN = RateLimitToken.RATE_LIMIT_TOKEN;
+    public static final PublisherAgreementEvent PUBLISHER_AGREEMENT_EVENT = PublisherAgreementEvent.PUBLISHER_AGREEMENT_EVENT;
 
     /**
      * Records all check/scan executions for audit trail
@@ -201,6 +190,11 @@ public class Tables {
      * The table <code>public.scan_job</code>.
      */
     public static final ScanJob SCAN_JOB = ScanJob.SCAN_JOB;
+
+    /**
+     * The table <code>public.setting</code>.
+     */
+    public static final Setting SETTING = Setting.SETTING;
 
     /**
      * The table <code>public.signature_key_pair</code>.
@@ -218,17 +212,17 @@ public class Tables {
     public static final SpringSessionAttributes SPRING_SESSION_ATTRIBUTES = SpringSessionAttributes.SPRING_SESSION_ATTRIBUTES;
 
     /**
-     * The table <code>public.tier</code>.
+     * The table <code>public.trusted_publisher</code>.
      */
-    public static final Tier TIER = Tier.TIER;
-
-    /**
-     * The table <code>public.usage_stats</code>.
-     */
-    public static final UsageStats USAGE_STATS = UsageStats.USAGE_STATS;
+    public static final TrustedPublisher TRUSTED_PUBLISHER = TrustedPublisher.TRUSTED_PUBLISHER;
 
     /**
      * The table <code>public.user_data</code>.
      */
     public static final UserData USER_DATA = UserData.USER_DATA;
+
+    /**
+     * The table <code>public.user_data_permission</code>.
+     */
+    public static final UserDataPermission USER_DATA_PERMISSION = UserDataPermission.USER_DATA_PERMISSION;
 }

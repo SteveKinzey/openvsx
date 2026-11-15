@@ -1,36 +1,40 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2024 Precies. Software OU and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.storage;
 
 import java.io.IOException;
 import java.net.URI;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.List;
 
 import jakarta.annotation.PostConstruct;
-
 import org.apache.commons.lang3.StringUtils;
-import org.eclipse.openvsx.entities.FileResource;
-import org.eclipse.openvsx.entities.Namespace;
-import org.eclipse.openvsx.util.TempFile;
-import org.eclipse.openvsx.util.UrlUtil;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.util.Pair;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerErrorException;
 import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+
+import org.eclipse.openvsx.entities.FileResource;
+import org.eclipse.openvsx.entities.Namespace;
+import org.eclipse.openvsx.util.HttpHeadersUtil;
+import org.eclipse.openvsx.util.TempFile;
+import org.eclipse.openvsx.util.UrlUtil;
 
 @Component
 public class LocalStorageService implements IStorageService {
@@ -42,7 +46,7 @@ public class LocalStorageService implements IStorageService {
     public boolean isEnabled() {
         return !StringUtils.isEmpty(storageDirectory);
     }
-    
+
     @PostConstruct
     public void validateStorageDirectory() throws IOException {
         if (!isEnabled()) {
@@ -87,11 +91,10 @@ public class LocalStorageService implements IStorageService {
     }
 
     public ResponseEntity<StreamingResponseBody> getFile(FileResource resource) {
-        var headers = getFileResponseHeaders(resource.getName());
+        var path = getPath(resource);
         return ResponseEntity.ok()
-                .headers(headers)
+                .headers(HttpHeadersUtil.createFileResponseHeaders(path))
                 .body(outputStream -> {
-                    var path = getPath(resource);
                     try (var in = Files.newInputStream(path)) {
                         in.transferTo(outputStream);
                     }
@@ -104,39 +107,36 @@ public class LocalStorageService implements IStorageService {
     }
 
     public ResponseEntity<StreamingResponseBody> getNamespaceLogo(Namespace namespace) {
-        if(!isEnabled()) {
-            throw new IllegalStateException("Cannot determine location of logo. Configure the 'ovsx.storage.local.directory' property.");
+        if (!isEnabled()) {
+            throw new IllegalStateException(
+                    "Cannot determine location of logo. Configure the 'ovsx.storage.local.directory' property.");
         }
 
+        var path = getLogoPath(namespace);
+
         return ResponseEntity.ok()
-                .headers(getFileResponseHeaders(namespace.getLogoName()))
+                .headers(HttpHeadersUtil.createFileResponseHeaders(path))
                 .body(outputStream -> {
-                    var path = getLogoPath(namespace);
                     try (var in = Files.newInputStream(path)) {
                         in.transferTo(outputStream);
                     }
                 });
     }
     public URI getNamespaceLogoLocation(Namespace namespace) {
-        return URI.create(UrlUtil.createApiUrl(UrlUtil.getBaseUrl(), "api", namespace.getName(), "logo", namespace.getLogoName()));
-    }
-
-    private HttpHeaders getFileResponseHeaders(String fileName) {
-        var headers = new HttpHeaders();
-        headers.setContentType(StorageUtil.getFileType(fileName));
-        if (fileName.endsWith(".vsix")) {
-            headers.add("Content-Disposition", "attachment; filename=\"" + fileName + "\"");
-        } else {
-            headers.setCacheControl(StorageUtil.getCacheControl(fileName));
-        }
-        return headers;
+        return URI.create(
+                UrlUtil.createApiUrl(
+                        UrlUtil.getBaseUrl(),
+                        "api",
+                        namespace.getName(),
+                        "logo",
+                        namespace.getLogoName()));
     }
 
     @Override
     public void uploadNamespaceLogo(TempFile logoFile) {
         try {
             var filePath = getLogoPath(logoFile.getNamespace());
-            Files.createDirectories(filePath);
+            Files.createDirectories(filePath.getParent());
             Files.copy(logoFile.getPath(), filePath, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
             throw new ServerErrorException("Failed to upload namespace logo file", e);
@@ -162,6 +162,16 @@ public class LocalStorageService implements IStorageService {
     }
 
     @Override
+    public long getFileSize(FileResource resource) throws IOException {
+        var path = getPath(resource);
+        try {
+            return Files.size(path);
+        } catch (NoSuchFileException e) {
+            throw new FileNotFoundInStorageException("File not found: " + path, e);
+        }
+    }
+
+    @Override
     public void copyFiles(List<Pair<FileResource, FileResource>> pairs) {
         try {
             for (var pair : pairs) {
@@ -182,15 +192,16 @@ public class LocalStorageService implements IStorageService {
     }
 
     private Path getPath(FileResource resource) {
-        if(!isEnabled()) {
-            throw new IllegalStateException("Cannot determine location of file. Configure the 'ovsx.storage.local.directory' property.");
+        if (!isEnabled()) {
+            throw new IllegalStateException(
+                    "Cannot determine location of file. Configure the 'ovsx.storage.local.directory' property.");
         }
 
         var extVersion = resource.getExtension();
         var extension = extVersion.getExtension();
         var namespace = extension.getNamespace();
         var segments = new ArrayList<>(List.of(storageDirectory, namespace.getName(), extension.getName()));
-        if(!extVersion.isUniversalTargetPlatform()) {
+        if (!extVersion.isUniversalTargetPlatform()) {
             segments.add(extVersion.getTargetPlatform());
         }
 
@@ -201,8 +212,9 @@ public class LocalStorageService implements IStorageService {
     }
 
     private Path getLogoPath(Namespace namespace) {
-        if(!isEnabled()) {
-            throw new IllegalStateException("Cannot determine location of logo. Configure the 'ovsx.storage.local.directory' property.");
+        if (!isEnabled()) {
+            throw new IllegalStateException(
+                    "Cannot determine location of logo. Configure the 'ovsx.storage.local.directory' property.");
         }
 
         var path = storageDirectory + "/" + namespace.getName() + "/logo/" + namespace.getLogoName();

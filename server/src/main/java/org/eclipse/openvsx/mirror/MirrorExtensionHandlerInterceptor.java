@@ -1,25 +1,29 @@
-/** ******************************************************************************
+/******************************************************************************
  * Copyright (c) 2022 Precies. Software Ltd and others
  *
+ * See the NOTICE file(s) distributed with this work for additional
+ * information regarding copyright ownership.
+ *
  * This program and the accompanying materials are made available under the
- * terms of the Eclipse Public License v. 2.0 which is available at
- * http://www.eclipse.org/legal/epl-2.0.
+ * terms of the Eclipse Public License 2.0 which is available at
+ * https://www.eclipse.org/legal/epl-2.0.
  *
  * SPDX-License-Identifier: EPL-2.0
- * ****************************************************************************** */
+ *****************************************************************************/
 package org.eclipse.openvsx.mirror;
+
+import java.util.Collections;
+import java.util.Map;
+import java.util.TreeMap;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import org.eclipse.openvsx.util.NamingUtil;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.servlet.HandlerInterceptor;
 import org.springframework.web.servlet.HandlerMapping;
 
-import java.util.Collections;
-import java.util.Map;
-import java.util.TreeMap;
+import org.eclipse.openvsx.util.NamingUtil;
 
 @Component
 @ConditionalOnProperty(value = "ovsx.data.mirror.enabled", havingValue = "true")
@@ -32,12 +36,12 @@ public class MirrorExtensionHandlerInterceptor implements HandlerInterceptor {
     }
 
     @Override
-    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) throws Exception {
+    public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
         var params = request.getRequestURI().equals("/vscode/item")
                 ? extractQueryParams(request)
                 : extractPathParams(request);
-        var namespaceName = (String) params.get("namespaceName");
-        var extensionName = (String) params.get("extensionName");
+        var namespaceName = params.get("namespaceName");
+        var extensionName = params.get("extensionName");
         if (!dataMirror.match(namespaceName, extensionName)) {
             response.reset();
             response.setStatus(HttpServletResponse.SC_NOT_FOUND);
@@ -54,7 +58,9 @@ public class MirrorExtensionHandlerInterceptor implements HandlerInterceptor {
                 : Collections.emptyMap();
     }
 
+    @SuppressWarnings("unchecked")
     private Map<String, String> extractPathParams(HttpServletRequest request) {
-        return new TreeMap<>((Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE));
+        return new TreeMap<>(
+                (Map<String, String>) request.getAttribute(HandlerMapping.URI_TEMPLATE_VARIABLES_ATTRIBUTE));
     }
 }

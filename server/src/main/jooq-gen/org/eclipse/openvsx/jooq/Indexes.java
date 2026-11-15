@@ -6,25 +6,24 @@ package org.eclipse.openvsx.jooq;
 
 import org.eclipse.openvsx.jooq.tables.AdminScanDecision;
 import org.eclipse.openvsx.jooq.tables.AdminStatistics;
-import org.eclipse.openvsx.jooq.tables.CustomerMembership;
-import org.eclipse.openvsx.jooq.tables.DownloadCountProcessedItem;
+import org.eclipse.openvsx.jooq.tables.DownloadIngestion;
 import org.eclipse.openvsx.jooq.tables.Extension;
 import org.eclipse.openvsx.jooq.tables.ExtensionReview;
 import org.eclipse.openvsx.jooq.tables.ExtensionScan;
 import org.eclipse.openvsx.jooq.tables.ExtensionThreat;
 import org.eclipse.openvsx.jooq.tables.ExtensionValidationFailure;
 import org.eclipse.openvsx.jooq.tables.ExtensionVersion;
+import org.eclipse.openvsx.jooq.tables.ExtensionVersionChange;
 import org.eclipse.openvsx.jooq.tables.FileDecision;
 import org.eclipse.openvsx.jooq.tables.FileResource;
-import org.eclipse.openvsx.jooq.tables.FlywaySchemaHistory;
 import org.eclipse.openvsx.jooq.tables.NamespaceMembership;
 import org.eclipse.openvsx.jooq.tables.PersistedLog;
-import org.eclipse.openvsx.jooq.tables.RateLimitToken;
+import org.eclipse.openvsx.jooq.tables.PublisherAgreementEvent;
 import org.eclipse.openvsx.jooq.tables.ScanCheckResult;
 import org.eclipse.openvsx.jooq.tables.ScanJob;
 import org.eclipse.openvsx.jooq.tables.SignatureKeyPair;
 import org.eclipse.openvsx.jooq.tables.SpringSession;
-import org.eclipse.openvsx.jooq.tables.Tier;
+import org.eclipse.openvsx.jooq.tables.TrustedPublisher;
 import org.jooq.Index;
 import org.jooq.OrderField;
 import org.jooq.impl.DSL;
@@ -41,23 +40,23 @@ public class Indexes {
     // INDEX definitions
     // -------------------------------------------------------------------------
 
-    public static final Index CUSTOMER_MEMBERSHIP_NAMESPACE_IDX = Internal.createIndex(DSL.name("customer_membership_namespace_idx"), CustomerMembership.CUSTOMER_MEMBERSHIP, new OrderField[] { CustomerMembership.CUSTOMER_MEMBERSHIP.CUSTOMER }, false);
-    public static final Index CUSTOMER_MEMBERSHIP_USER_DATA_IDX = Internal.createIndex(DSL.name("customer_membership_user_data_idx"), CustomerMembership.CUSTOMER_MEMBERSHIP, new OrderField[] { CustomerMembership.CUSTOMER_MEMBERSHIP.USER_DATA }, false);
-    public static final Index DOWNLOAD_COUNT_PROCESSED_ITEM_NAME = Internal.createIndex(DSL.name("download_count_processed_item_name"), DownloadCountProcessedItem.DOWNLOAD_COUNT_PROCESSED_ITEM, new OrderField[] { DownloadCountProcessedItem.DOWNLOAD_COUNT_PROCESSED_ITEM.NAME }, false);
-    public static final Index DOWNLOAD_COUNT_PROCESSED_ITEM_STORAGE_TYPE = Internal.createIndex(DSL.name("download_count_processed_item_storage_type"), DownloadCountProcessedItem.DOWNLOAD_COUNT_PROCESSED_ITEM, new OrderField[] { DownloadCountProcessedItem.DOWNLOAD_COUNT_PROCESSED_ITEM.STORAGE_TYPE }, false);
+    public static final Index DOWNLOAD_INGESTION_NAME = Internal.createIndex(DSL.name("download_ingestion_name"), DownloadIngestion.DOWNLOAD_INGESTION, new OrderField[] { DownloadIngestion.DOWNLOAD_INGESTION.NAME }, false);
+    public static final Index DOWNLOAD_INGESTION_STORAGE_TYPE = Internal.createIndex(DSL.name("download_ingestion_storage_type"), DownloadIngestion.DOWNLOAD_INGESTION, new OrderField[] { DownloadIngestion.DOWNLOAD_INGESTION.STORAGE_TYPE }, false);
     public static final Index EXTENSION__NAMESPACE_ID__IDX = Internal.createIndex(DSL.name("extension__namespace_id__idx"), Extension.EXTENSION, new OrderField[] { Extension.EXTENSION.NAMESPACE_ID }, false);
     public static final Index EXTENSION_REVIEW__EXTENSION_ID__IDX = Internal.createIndex(DSL.name("extension_review__extension_id__idx"), ExtensionReview.EXTENSION_REVIEW, new OrderField[] { ExtensionReview.EXTENSION_REVIEW.EXTENSION_ID }, false);
     public static final Index EXTENSION_REVIEW__USER_ID__IDX = Internal.createIndex(DSL.name("extension_review__user_id__idx"), ExtensionReview.EXTENSION_REVIEW, new OrderField[] { ExtensionReview.EXTENSION_REVIEW.USER_ID }, false);
     public static final Index EXTENSION_VERSION__EXTENSION_ID__IDX = Internal.createIndex(DSL.name("extension_version__extension_id__idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.EXTENSION_ID }, false);
+    public static final Index EXTENSION_VERSION__PUBLISHED_BY_ID__IDX = Internal.createIndex(DSL.name("extension_version__published_by_id__idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.PUBLISHED_BY_ID }, false);
     public static final Index EXTENSION_VERSION__PUBLISHED_WITH_ID__IDX = Internal.createIndex(DSL.name("extension_version__published_with_id__idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.PUBLISHED_WITH_ID }, false);
     public static final Index EXTENSION_VERSION_BY_TARGET_PLATFORM_ORDER_BY_IDX = Internal.createIndex(DSL.name("extension_version_by_target_platform_order_by_idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.EXTENSION_ID, ExtensionVersion.EXTENSION_VERSION.UNIVERSAL_TARGET_PLATFORM.desc(), ExtensionVersion.EXTENSION_VERSION.TARGET_PLATFORM, ExtensionVersion.EXTENSION_VERSION.SEMVER_MAJOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_MINOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_PATCH.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_IS_PRE_RELEASE, ExtensionVersion.EXTENSION_VERSION.TIMESTAMP.desc() }, false);
+    public static final Index EXTENSION_VERSION_CHANGE_EXTENSION_VERSION_ID_IDX = Internal.createIndex(DSL.name("extension_version_change_extension_version_id_idx"), ExtensionVersionChange.EXTENSION_VERSION_CHANGE, new OrderField[] { ExtensionVersionChange.EXTENSION_VERSION_CHANGE.EXTENSION_VERSION_ID }, false);
+    public static final Index EXTENSION_VERSION_CHANGE_FEED_IDX = Internal.createIndex(DSL.name("extension_version_change_feed_idx"), ExtensionVersionChange.EXTENSION_VERSION_CHANGE, new OrderField[] { ExtensionVersionChange.EXTENSION_VERSION_CHANGE.CHANGED_AT, ExtensionVersionChange.EXTENSION_VERSION_CHANGE.ID }, false);
     public static final Index EXTENSION_VERSION_LATEST_ORDER_BY_IDX = Internal.createIndex(DSL.name("extension_version_latest_order_by_idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.EXTENSION_ID, ExtensionVersion.EXTENSION_VERSION.SEMVER_MAJOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_MINOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_PATCH.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_IS_PRE_RELEASE, ExtensionVersion.EXTENSION_VERSION.UNIVERSAL_TARGET_PLATFORM.desc(), ExtensionVersion.EXTENSION_VERSION.TARGET_PLATFORM, ExtensionVersion.EXTENSION_VERSION.TIMESTAMP.desc() }, false);
     public static final Index EXTENSION_VERSION_ORDER_BY_IDX = Internal.createIndex(DSL.name("extension_version_order_by_idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.SEMVER_MAJOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_MINOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_PATCH.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_IS_PRE_RELEASE, ExtensionVersion.EXTENSION_VERSION.UNIVERSAL_TARGET_PLATFORM.desc(), ExtensionVersion.EXTENSION_VERSION.TARGET_PLATFORM, ExtensionVersion.EXTENSION_VERSION.TIMESTAMP.desc() }, false);
     public static final Index EXTENSION_VERSION_VERSION_LIST_ORDER_BY_IDX = Internal.createIndex(DSL.name("extension_version_version_list_order_by_idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.SEMVER_MAJOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_MINOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_PATCH.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_IS_PRE_RELEASE, ExtensionVersion.EXTENSION_VERSION.VERSION }, false);
     public static final Index EXTENSION_VERSION_VERSION_MAP_ORDER_BY_IDX = Internal.createIndex(DSL.name("extension_version_version_map_order_by_idx"), ExtensionVersion.EXTENSION_VERSION, new OrderField[] { ExtensionVersion.EXTENSION_VERSION.EXTENSION_ID, ExtensionVersion.EXTENSION_VERSION.SEMVER_MAJOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_MINOR.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_PATCH.desc(), ExtensionVersion.EXTENSION_VERSION.SEMVER_IS_PRE_RELEASE, ExtensionVersion.EXTENSION_VERSION.VERSION }, false);
     public static final Index FILE_RESOURCE_EXTENSION_IDX = Internal.createIndex(DSL.name("file_resource_extension_idx"), FileResource.FILE_RESOURCE, new OrderField[] { FileResource.FILE_RESOURCE.EXTENSION_ID }, false);
     public static final Index FILE_RESOURCE_TYPE_IDX = Internal.createIndex(DSL.name("file_resource_type_idx"), FileResource.FILE_RESOURCE, new OrderField[] { FileResource.FILE_RESOURCE.TYPE }, false);
-    public static final Index FLYWAY_SCHEMA_HISTORY_S_IDX = Internal.createIndex(DSL.name("flyway_schema_history_s_idx"), FlywaySchemaHistory.FLYWAY_SCHEMA_HISTORY, new OrderField[] { FlywaySchemaHistory.FLYWAY_SCHEMA_HISTORY.SUCCESS }, false);
     public static final Index IDX_EXTENSION_SCAN_COMPLETED_AT = Internal.createIndex(DSL.name("idx_extension_scan_completed_at"), ExtensionScan.EXTENSION_SCAN, new OrderField[] { ExtensionScan.EXTENSION_SCAN.COMPLETED_AT }, false);
     public static final Index IDX_EXTENSION_SCAN_STARTED_AT = Internal.createIndex(DSL.name("idx_extension_scan_started_at"), ExtensionScan.EXTENSION_SCAN, new OrderField[] { ExtensionScan.EXTENSION_SCAN.STARTED_AT.desc() }, false);
     public static final Index IDX_EXTENSION_SCAN_STATUS = Internal.createIndex(DSL.name("idx_extension_scan_status"), ExtensionScan.EXTENSION_SCAN, new OrderField[] { ExtensionScan.EXTENSION_SCAN.STATUS }, false);
@@ -82,8 +81,7 @@ public class Indexes {
     public static final Index NAMESPACE_MEMBERSHIP__NAMESPACE__IDX = Internal.createIndex(DSL.name("namespace_membership__namespace__idx"), NamespaceMembership.NAMESPACE_MEMBERSHIP, new OrderField[] { NamespaceMembership.NAMESPACE_MEMBERSHIP.NAMESPACE }, false);
     public static final Index NAMESPACE_MEMBERSHIP__USER_DATA__IDX = Internal.createIndex(DSL.name("namespace_membership__user_data__idx"), NamespaceMembership.NAMESPACE_MEMBERSHIP, new OrderField[] { NamespaceMembership.NAMESPACE_MEMBERSHIP.USER_DATA }, false);
     public static final Index PERSISTED_LOG__USER_DATA__IDX = Internal.createIndex(DSL.name("persisted_log__user_data__idx"), PersistedLog.PERSISTED_LOG, new OrderField[] { PersistedLog.PERSISTED_LOG.USER_DATA }, false);
-    public static final Index RATE_LIMIT_TOKEN_CUSTOMER_IDX = Internal.createIndex(DSL.name("rate_limit_token_customer_idx"), RateLimitToken.RATE_LIMIT_TOKEN, new OrderField[] { RateLimitToken.RATE_LIMIT_TOKEN.CUSTOMER }, false);
-    public static final Index RATE_LIMIT_TOKEN_VALUE_IDX = Internal.createIndex(DSL.name("rate_limit_token_value_idx"), RateLimitToken.RATE_LIMIT_TOKEN, new OrderField[] { RateLimitToken.RATE_LIMIT_TOKEN.VALUE }, false);
+    public static final Index PUBLISHER_AGREEMENT_EVENT__USER_DATA_ID__IDX = Internal.createIndex(DSL.name("publisher_agreement_event__user_data_id__idx"), PublisherAgreementEvent.PUBLISHER_AGREEMENT_EVENT, new OrderField[] { PublisherAgreementEvent.PUBLISHER_AGREEMENT_EVENT.USER_DATA_ID, PublisherAgreementEvent.PUBLISHER_AGREEMENT_EVENT.ID }, false);
     public static final Index SCAN_CHECK_RESULT_CHECK_TYPE_IDX = Internal.createIndex(DSL.name("scan_check_result_check_type_idx"), ScanCheckResult.SCAN_CHECK_RESULT, new OrderField[] { ScanCheckResult.SCAN_CHECK_RESULT.CHECK_TYPE }, false);
     public static final Index SCAN_CHECK_RESULT_SCAN_ID_IDX = Internal.createIndex(DSL.name("scan_check_result_scan_id_idx"), ScanCheckResult.SCAN_CHECK_RESULT, new OrderField[] { ScanCheckResult.SCAN_CHECK_RESULT.SCAN_ID }, false);
     public static final Index SCAN_JOB_EXTENSION_VERSION_IDX = Internal.createIndex(DSL.name("scan_job_extension_version_idx"), ScanJob.SCAN_JOB, new OrderField[] { ScanJob.SCAN_JOB.EXTENSION_VERSION_ID }, false);
@@ -94,7 +92,8 @@ public class Indexes {
     public static final Index SPRING_SESSION_IX1 = Internal.createIndex(DSL.name("spring_session_ix1"), SpringSession.SPRING_SESSION, new OrderField[] { SpringSession.SPRING_SESSION.SESSION_ID }, true);
     public static final Index SPRING_SESSION_IX2 = Internal.createIndex(DSL.name("spring_session_ix2"), SpringSession.SPRING_SESSION, new OrderField[] { SpringSession.SPRING_SESSION.EXPIRY_TIME }, false);
     public static final Index SPRING_SESSION_IX3 = Internal.createIndex(DSL.name("spring_session_ix3"), SpringSession.SPRING_SESSION, new OrderField[] { SpringSession.SPRING_SESSION.PRINCIPAL_NAME }, false);
-    public static final Index TIER_TIER_TYPE = Internal.createIndex(DSL.name("tier_tier_type"), Tier.TIER, new OrderField[] { Tier.TIER.TIER_TYPE }, false);
+    public static final Index TRUSTED_PUBLISHER_EXTENSION_IDX = Internal.createIndex(DSL.name("trusted_publisher_extension_idx"), TrustedPublisher.TRUSTED_PUBLISHER, new OrderField[] { TrustedPublisher.TRUSTED_PUBLISHER.EXTENSION_ID }, true);
+    public static final Index UNIQUE_ACTIVE_REVIEW = Internal.createIndex(DSL.name("unique_active_review"), ExtensionReview.EXTENSION_REVIEW, new OrderField[] { ExtensionReview.EXTENSION_REVIEW.EXTENSION_ID, ExtensionReview.EXTENSION_REVIEW.USER_ID }, true);
     public static final Index UNIQUE_ACTIVE_SIGNATURE_KEY_PAIR_IDX = Internal.createIndex(DSL.name("unique_active_signature_key_pair_idx"), SignatureKeyPair.SIGNATURE_KEY_PAIR, new OrderField[] { SignatureKeyPair.SIGNATURE_KEY_PAIR.ACTIVE }, true);
     public static final Index UNIQUE_ADMIN_STATISTICS = Internal.createIndex(DSL.name("unique_admin_statistics"), AdminStatistics.ADMIN_STATISTICS, new OrderField[] { AdminStatistics.ADMIN_STATISTICS.YEAR, AdminStatistics.ADMIN_STATISTICS.MONTH }, true);
 }

@@ -8,8 +8,9 @@
  * SPDX-License-Identifier: EPL-2.0
  ********************************************************************************/
 import { RegistryOptions } from './registry-options';
+import { TrustedPublishingOptions } from './trusted-publishing-options';
 
-export interface PublishCommonOptions extends RegistryOptions {
+export interface PublishCommonOptions extends RegistryOptions, TrustedPublishingOptions {
     /**
      * Path to the vsix file to be published. Cannot be used together with `packagePath`.
      */
@@ -27,9 +28,20 @@ export interface PublishCommonOptions extends RegistryOptions {
      */
     yarn?: boolean;
     /**
+     * Recurse into symlinked directories when collecting the files to pack, instead of packing each
+     * symlink as a file. Needed for a `node_modules` built out of symlinks, as pnpm's is. Only valid
+     * with `packagePath`.
+     */
+    followSymlinks?: boolean;
+    /**
      * Mark this package as a pre-release. Only valid with `packagePath`.
      */
     preRelease?: boolean;
+    /**
+     * Package the extension even though its manifest has no `repository` field, instead of asking for
+     * confirmation. Only valid with `packagePath`.
+     */
+    allowMissingRepository?: boolean;
     /**
      * Whether to fail silently if version already exists on the marketplace
      */

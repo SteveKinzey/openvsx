@@ -1,24 +1,25 @@
-/********************************************************************************
- * Copyright (c) 2026 Contributors to the Eclipse Foundation 
+/******************************************************************************
+ * Copyright (c) 2026 Contributors to the Eclipse Foundation
  *
- * See the NOTICE file(s) distributed with this work for additional 
+ * See the NOTICE file(s) distributed with this work for additional
  * information regarding copyright ownership.
  *
- * This program and the accompanying materials are made available under the 
+ * This program and the accompanying materials are made available under the
  * terms of the Eclipse Public License 2.0 which is available at
- * https://www.eclipse.org/legal/epl-2.0
+ * https://www.eclipse.org/legal/epl-2.0.
  *
- * SPDX-License-Identifier: EPL-2.0 
- ********************************************************************************/
+ * SPDX-License-Identifier: EPL-2.0
+ *****************************************************************************/
 package org.eclipse.openvsx.entities;
 
-import jakarta.persistence.*;
 import java.io.Serial;
 import java.io.Serializable;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+
+import jakarta.persistence.*;
 
 /**
  * Main scan record that tracks the complete lifecycle of an extension
@@ -36,7 +37,7 @@ public class ExtensionScan implements Serializable {
     @SequenceGenerator(name = "extensionScanSeq", sequenceName = "extension_scan_seq", allocationSize = 1)
     private long id;
 
-    /** 
+    /**
      * Raw metadata about the extension being scanned.
      * These are stored as strings (not foreign keys) so scan history is preserved
      * even if the extension/namespace/version is deleted.
@@ -265,8 +266,12 @@ public class ExtensionScan implements Serializable {
 
     @Override
     public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
         ExtensionScan that = (ExtensionScan) o;
         return id == that.id
                 && Objects.equals(namespaceName, that.namespaceName)
@@ -283,8 +288,17 @@ public class ExtensionScan implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(id, namespaceName, extensionName, extensionVersion, targetPlatform,
-                publisher, publisherUrl, startedAt, completedAt, status, errorMessage);
+        return Objects.hash(
+                id,
+                namespaceName,
+                extensionName,
+                extensionVersion,
+                targetPlatform,
+                publisher,
+                publisherUrl,
+                startedAt,
+                completedAt,
+                status,
+                errorMessage);
     }
 }
-

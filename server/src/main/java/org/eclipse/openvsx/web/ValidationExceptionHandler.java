@@ -12,9 +12,12 @@
  *****************************************************************************/
 package org.eclipse.openvsx.web;
 
-import com.google.common.collect.Iterables;
+import java.lang.reflect.Method;
+import java.util.stream.Collectors;
+
+import jakarta.validation.ConstraintViolation;
 import jakarta.validation.ConstraintViolationException;
-import org.eclipse.openvsx.json.ResultJson;
+import jakarta.validation.Path;
 import org.springframework.core.ResolvableType;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -23,8 +26,7 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.method.HandlerMethod;
 
-import java.lang.reflect.Method;
-import java.util.stream.Collectors;
+import org.eclipse.openvsx.json.ResultJson;
 
 @RestControllerAdvice
 public class ValidationExceptionHandler {
@@ -37,20 +39,31 @@ public class ValidationExceptionHandler {
             Class<?> typeArg = resolvableType.getGeneric(0).resolve();
             if (typeArg != null && ResultJson.class.isAssignableFrom(typeArg)) {
                 var errors = ex.getConstraintViolations().stream()
-                        .map(cv -> Iterables.getLast(cv.getPropertyPath()) + ": " + cv.getMessage())
+                        .map(ValidationExceptionHandler::describe)
                         .collect(Collectors.joining(", "));
 
                 Method staticMethod = typeArg.getMethod("error", String.class);
                 var json = (ResultJson) staticMethod.invoke(null, errors);
                 return new ResponseEntity<>(json, HttpStatus.BAD_REQUEST);
             }
-        } catch (Exception _) {}
+        } catch (Exception _) {
+        }
 
         ProblemDetail problem = ProblemDetail.forStatus(HttpStatus.BAD_REQUEST);
         problem.setTitle("Validation failed");
-        problem.setProperty("errors", ex.getConstraintViolations().stream()
-                .map(cv -> Iterables.getLast(cv.getPropertyPath()) + ": " + cv.getMessage())
-                .toList());
+        problem.setProperty(
+                "errors",
+                ex.getConstraintViolations().stream()
+                        .map(ValidationExceptionHandler::describe)
+                        .toList());
         return new ResponseEntity<>(problem, HttpStatus.BAD_REQUEST);
+    }
+
+    private static String describe(ConstraintViolation<?> violation) {
+        Path.Node leaf = null;
+        for (var node : violation.getPropertyPath()) {
+            leaf = node;
+        }
+        return leaf + ": " + violation.getMessage();
     }
 }
